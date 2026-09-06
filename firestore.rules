@@ -1,0 +1,107 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Admin-configurable cashier permissions (see Settings page). Missing
+    // doc == every flag off, so a fresh project defaults to locked-down.
+    function cashierCan(flag) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/settings/cashierPermissions) &&
+        get(/databases/$(database)/documents/settings/cashierPermissions).data[flag] == true;
+    }
+
+    // User profiles — only Cloud Functions (Admin SDK, see functions/) may
+    // create or modify these, so every user can trust role claims here.
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    // Stock (intake, price-each, expiry) is a cashier-facing screen in the
+    // design, not admin-only, so any signed-in user can write here.
+    match /products/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /bakeryDays/{date}/items/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Settling credit moves paid/due on a bill, which any signed-in user may
+    // do — voiding one (a status change) still needs the permission.
+    function onlySettlesCredit() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+        .hasOnly(['paid', 'due']);
+    }
+
+    match /bills/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isAdmin() || cashierCan('voidBills') ||
+        (isSignedIn() && onlySettlesCredit());
+      allow delete: if false;
+    }
+
+    // Customers and their credit balance. Written client-side, like products
+    // and bills — the till has to be able to add a customer mid-sale.
+    match /customers/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Credit payments are the audit trail behind every balance change, so
+    // they are append-only: nobody edits or deletes a receipt after the fact.
+    match /creditPayments/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    match /returns/{id} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || cashierCan('logReturns');
+      allow update, delete: if isAdmin();
+    }
+
+    match /counters/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Cashier permission toggles and store settings — admin-editable from
+    // Settings, readable by everyone so a cashier's own client can gate its UI
+    // correctly. Covers settings/cashierPermissions and settings/store.
+    match /settings/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Approved / pending / blocked browsers. Only the Cloud Functions (Admin
+    // SDK) register a device or decide its status; a client may read the
+    // devices it has actually been used on, so DeviceGate can react live to an
+    // admin's decision.
+    match /deviceApprovals/{deviceId} {
+      allow read: if isAdmin() ||
+        (isSignedIn() && (resource == null || request.auth.uid in resource.data.users));
+      allow write: if false;
+    }
+
+    // The 6-digit codes themselves — never readable by any client, or the
+    // device asking for approval could just read its own code. The Admin SDK
+    // in functions/ bypasses these rules.
+    match /deviceCodes/{deviceId} {
+      allow read, write: if false;
+    }
+  }
+}

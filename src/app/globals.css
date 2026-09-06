@@ -1,26 +1,135 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-ink: #0f1629;
+  --color-ground: #f6f8fb;
+  --color-surface: #ffffff;
+  --color-border: #e4e9f1;
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-success: #16a34a;
+  --color-warning: #ea580c;
+  --color-danger: #dc2626;
+  --color-muted: #64748b;
+  --color-muted-2: #94a3b8;
+
+  /* Ink-adjacent shades. The sidebar, drawer, mobile header and splash all
+     sit on dark surfaces, and a single flat #0F1629 reads as unfinished —
+     these give those surfaces depth without leaving the ink/blue family. */
+  --color-ink-900: #0a0f1e;
+  --color-ink-800: #131c31;
+  --color-ink-700: #1e2942;
+  --color-ink-line: #232f4c;
+  /* Nav text that is legible on ink but clearly recedes behind the active row. */
+  --color-nav-idle: #97a5c0;
+  --color-nav-active: #1b2c50;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-ink: var(--color-ink);
+  --color-ground: var(--color-ground);
+  --color-surface: var(--color-surface);
+  --color-border: var(--color-border);
+  --color-accent: var(--color-accent);
+  --color-accent-hover: var(--color-accent-hover);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --color-muted: var(--color-muted);
+  --color-muted-2: var(--color-muted-2);
+  --color-ink-900: var(--color-ink-900);
+  --color-ink-800: var(--color-ink-800);
+  --color-ink-700: var(--color-ink-700);
+  --color-ink-line: var(--color-ink-line);
+  --color-nav-idle: var(--color-nav-idle);
+  --color-nav-active: var(--color-nav-active);
+  --font-sans: var(--font-jakarta);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Dark surfaces -------------------------------------------------------
+   Gradients rather than utilities so the stops stay in one place and every
+   dark surface in the app is guaranteed to match. */
+
+/* Sidebar and mobile drawer. */
+.surface-nav {
+  background-image: linear-gradient(180deg, #141d33 0%, #101827 55%, #0b1120 100%);
+}
+
+/* Full-screen ink for the splash and the login page. */
+.surface-ink {
+  background-color: var(--color-ink-900);
+  background-image: linear-gradient(180deg, #141d33 0%, #0d1425 60%, #0a0f1e 100%);
+}
+
+/* ---- Splash motion -------------------------------------------------------
+   A staggered rise on the mark and wordmark, plus one indeterminate bar.
+   Nothing loops except the bar. */
+
+@keyframes brand-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes brand-glow {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes track-sweep {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(340%);
+  }
+}
+
+.animate-rise {
+  animation: brand-rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-glow {
+  animation: brand-glow 3.2s ease-in-out infinite;
+}
+
+.animate-sweep {
+  animation: track-sweep 1.5s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-glow,
+  .animate-sweep {
+    animation: none;
+  }
+  .animate-rise {
+    opacity: 1;
+    transform: none;
+  }
+  /* The bar still has to read as "busy", so hold it steady at full width. */
+  .animate-sweep {
+    width: 100%;
+    transform: none;
+  }
 }

@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "bake-shop-9f4f0"
+  },
+  "targets": {
+    "bake-shop-9f4f0": {
+      "hosting": {
+        "bake-shopx": ["bake-shopx"]
+      }
+    }
+  }
+}

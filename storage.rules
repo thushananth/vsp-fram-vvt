@@ -1,0 +1,21 @@
+rules_version = '2';
+
+// Product photos only. Same posture as firestore.rules for `products`: any
+// signed-in user of the till may read and write, because adding stock is a
+// cashier-facing screen in this app, not an admin-only one.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /products/{productId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth != null;
+    }
+
+    // Nothing else is writable from a browser.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
