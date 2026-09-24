@@ -4,6 +4,11 @@
       "database": "bake-shop-uat-v2",
       "rules": "firestore.rules",
       "indexes": "firestore.indexes.json"
+    },
+    {
+      "database": "bake-shop-live-v2",
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
     }
   ],
   "functions": [

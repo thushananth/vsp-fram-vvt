@@ -222,11 +222,6 @@ export default function BillingPage() {
     const soldLines = cart;
     const soldTo = customer;
     const due = round2(total - payment.paid);
-    // Decided here, from the live product list, because bills.ts has no way to
-    // tell a bakery line from a barcoded good.
-    const bakeryProductIds = soldLines
-      .filter((l) => products.find((p) => p.id === l.productId)?.isBakery)
-      .map((l) => l.productId);
     try {
       const result = createBill({
         lines: soldLines,
@@ -238,7 +233,6 @@ export default function BillingPage() {
         paymentType: payment.paymentType,
         customerId: soldTo?.id ?? null,
         customerName: soldTo?.name ?? null,
-        bakeryProductIds,
       });
 
       // The bill is durable the moment createBill returns — it is in the local
@@ -390,35 +384,58 @@ export default function BillingPage() {
         >
           {filtered.map((p) =>
             dense ? (
-              <button
-                key={p.id}
-                onClick={() => pickProduct(p)}
-                className="flex items-center gap-2.5 rounded-xl border border-border bg-surface px-2.5 py-2 text-left"
-              >
-                <ProductThumb name={p.name} imageUrl={p.imageUrl} size="sm" />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[15px] font-bold">{p.name}</span>
-                  <span className="block truncate text-[11px] font-medium text-muted-2">
-                    {p.category}
-                  </span>
+             <button
+              key={p.id}
+              onClick={() => pickProduct(p)}
+              className="flex items-center gap-2.5 rounded-xl border border-border bg-surface px-2.5 py-2 text-left"
+            >
+              {/* Product image disabled
+              <ProductThumb name={p.name} imageUrl={p.imageUrl} size="sm" />
+              */}
+
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[15px] font-bold">
+                  {p.name}
                 </span>
-                <span className="tabular-nums shrink-0 text-sm font-bold text-accent">
-                  {money(p.price)}
+
+                <span className="block truncate text-[11px] font-medium text-muted-2">
+                  {p.category}
                 </span>
-              </button>
+
+                <span className="block text-[11px] font-bold text-muted">
+                  Available: {p.onShelf}
+                </span>
+              </span>
+
+              <span className="tabular-nums shrink-0 text-sm font-bold text-accent">
+                {money(p.price)}
+              </span>
+            </button>
             ) : (
               <button
                 key={p.id}
                 onClick={() => pickProduct(p)}
                 className="flex flex-col overflow-hidden rounded-xl border border-border bg-surface text-left"
               >
+                {/* Product image disabled
                 <div className="aspect-square w-full overflow-hidden">
-                  <ProductThumb name={p.name} imageUrl={p.imageUrl} shape="rounded-none" />
+                  <ProductThumb
+                    name={p.name}
+                    imageUrl={p.imageUrl}
+                    shape="rounded-none"
+                  />
                 </div>
-                <div className="flex flex-1 flex-col justify-between gap-0.5 p-2">
+                */}
+
+                <div className="flex flex-1 flex-col justify-between gap-1 p-3">
                   <span className="line-clamp-2 text-[13px] font-semibold leading-tight">
                     {p.name}
                   </span>
+
+                  <span className="text-[12px] font-medium text-muted">
+                    Available: {p.onShelf}
+                  </span>
+
                   <span className="tabular-nums text-[13px] font-bold text-accent">
                     {money(p.price)}
                   </span>

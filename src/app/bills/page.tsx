@@ -49,6 +49,7 @@ export default function BillsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [voiding, setVoiding] = useState(false);
   const [voidError, setVoidError] = useState<string | null>(null);
+  const [confirmingVoid, setConfirmingVoid] = useState<Bill | null>(null);
   const journal = useBillJournal();
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
@@ -121,6 +122,7 @@ export default function BillsPage() {
     setVoidError(null);
     try {
       await voidBill(bill.id);
+      setConfirmingVoid(null);
     } catch (err) {
       // Voiding is one of the few writes that genuinely needs the server, so
       // say so rather than leaving the button spinning.
@@ -240,7 +242,7 @@ export default function BillsPage() {
           purpose — narrowing the list below must not also narrow these, or the
           two would tell different stories at a glance. */}
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        <Stat label="Bills" value={String(inRange.length)} note={`${voidCount} void`} />
+        <Stat label="Bills" value={String(inRange.length)} note={`${voidCount} deleted`} />
         <Stat label="Sales" value={money(salesTotal)} note={`${paidBills.length} paid`} />
         <Stat
           label="Cash collected"
@@ -388,7 +390,7 @@ export default function BillsPage() {
                     }`}
                   >
                     {b.status === "void"
-                      ? "Void"
+                      ? "Deleted"
                       : b.due > 0
                         ? "Credit"
                         : b.synced
@@ -407,8 +409,7 @@ export default function BillsPage() {
                 canVoid={canVoid}
                 canReprint={canReprint}
                 voiding={voiding}
-                voidError={voidError}
-                onVoid={() => handleVoid(selected)}
+                onVoid={() => setConfirmingVoid(selected)}
                 onReprint={() => handleReprint(selected)}
               />
             </div>
@@ -471,11 +472,43 @@ export default function BillsPage() {
               canVoid={canVoid}
               canReprint={canReprint}
               voiding={voiding}
-              voidError={voidError}
-              onVoid={() => handleVoid(opened)}
+              onVoid={() => setConfirmingVoid(opened)}
               onReprint={() => handleReprint(opened)}
               onClose={() => setSelectedId(null)}
             />
+          </div>
+        </div>
+      )}
+
+      {confirmingVoid && (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-ink/50 sm:items-center">
+          <div className="mx-auto w-full max-w-sm rounded-t-3xl bg-surface p-5 sm:rounded-3xl">
+            <h3 className="text-lg font-extrabold">Delete bill #{confirmingVoid.no}?</h3>
+            <p className="mt-1.5 text-sm font-medium text-muted">
+              This marks the bill as void and cannot be undone. The receipt stays on record but no
+              longer counts toward sales.
+            </p>
+            {voidError && (
+              <p role="alert" className="mt-3 text-xs font-bold text-danger">
+                {voidError}
+              </p>
+            )}
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => { setConfirmingVoid(null); setVoidError(null); }}
+                disabled={voiding}
+                className="min-h-[48px] flex-1 rounded-xl border border-border text-sm font-bold text-muted disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleVoid(confirmingVoid)}
+                disabled={voiding}
+                className="min-h-[48px] flex-1 rounded-xl bg-danger text-sm font-bold text-white disabled:opacity-40"
+              >
+                {voiding ? "Deleting…" : "Delete bill"}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -493,7 +526,6 @@ function BillDetail({
   canVoid,
   canReprint,
   voiding,
-  voidError,
   onVoid,
   onReprint,
   onClose,
@@ -502,7 +534,6 @@ function BillDetail({
   canVoid: boolean;
   canReprint: boolean;
   voiding: boolean;
-  voidError: string | null;
   onVoid: () => void;
   onReprint: () => void;
   onClose?: () => void;
@@ -591,17 +622,12 @@ function BillDetail({
           onClick={onVoid}
           className="min-h-[52px] flex-1 rounded-xl border border-danger/40 text-[15px] font-bold text-danger disabled:opacity-40"
         >
-          {bill.status === "void" ? "Voided" : "Void"}
+          {bill.status === "void" ? "Deleted" : "Delete"}
         </button>
       </div>
-      {voidError && (
-        <p role="alert" className="mt-3 text-xs font-bold text-danger">
-          {voidError}
-        </p>
-      )}
       {!canVoid && (
         <p className="mt-3 text-xs font-medium text-muted-2">
-          Voiding a bill isn&apos;t enabled for cashiers — an admin can turn this on in Settings.
+          Deleting a bill isn&apos;t enabled for cashiers — an admin can turn this on in Settings.
         </p>
       )}
       {!canReprint && (

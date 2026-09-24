@@ -3,13 +3,13 @@
 import { useEffect, useState } from "react";
 import {
   collection,
+  deleteDoc,
   doc,
   onSnapshot,
   orderBy,
   query,
-  runTransaction,
   serverTimestamp,
-  where,
+  setDoc,
   Timestamp,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -22,16 +22,13 @@ function toMillis(value: unknown): number {
   return 0;
 }
 
-export function useReturns(date: string): { returns: ReturnEntry[]; loading: boolean } {
+/** Every return ever logged, newest first — callers filter by date range themselves. */
+export function useReturns(): { returns: ReturnEntry[]; loading: boolean } {
   const [returns, setReturns] = useState<ReturnEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(
-      collection(db, "returns"),
-      where("date", "==", date),
-      orderBy("createdAt", "desc"),
-    );
+    const q = query(collection(db, "returns"), orderBy("createdAt", "desc"));
     return onSnapshot(
       q,
       (snap) => {
@@ -53,17 +50,17 @@ export function useReturns(date: string): { returns: ReturnEntry[]; loading: boo
       },
       () => setLoading(false),
     );
-  }, [date]);
+  }, []);
 
   return { returns, loading };
 }
 
 /**
- * Log a return: writes the return doc and adds to the day's returned count
- * together, so the day-end table can never disagree with the return log.
+ * Log a return — just the entry itself. It's a record for the report, not a
+ * stock adjustment: what happens to the shelf count is up to whoever logs it,
+ * the same as any other manual stock change.
  *
- * Online-only. A transaction has no offline form, and unlike a sale a return
- * is end-of-day paperwork that can wait for the connection.
+ * Online-only, like every write here that isn't a sale.
  */
 export async function logReturn(params: {
   date: string;
@@ -73,32 +70,24 @@ export async function logReturn(params: {
   reason: ReturnEntry["reason"];
   byUserId: string;
 }) {
-  const { date, productId, name, qty, reason, byUserId } = params;
+  const { date, productId, qty, reason, byUserId } = params;
   return requireServer(
-    runTransaction(db, async (tx) => {
-      const returnRef = doc(collection(db, "returns"));
-      tx.set(returnRef, {
-        date,
-        productId,
-        qty,
-        reason,
-        byUserId,
-        createdAt: serverTimestamp(),
-      });
-
-      const dayItemRef = doc(db, "bakeryDays", date, "items", productId);
-      const snap = await tx.get(dayItemRef);
-      tx.set(
-        dayItemRef,
-        {
-          name,
-          received: snap.data()?.received ?? 0,
-          sold: snap.data()?.sold ?? 0,
-          returned: (snap.data()?.returned ?? 0) + qty,
-        },
-        { merge: true },
-      );
+    setDoc(doc(collection(db, "returns")), {
+      date,
+      productId,
+      qty,
+      reason,
+      byUserId,
+      createdAt: serverTimestamp(),
     }),
     "Logging a return needs a connection — the server didn't answer. Nothing was recorded; try again.",
+  );
+}
+
+/** Remove a logged return — for a mistaken entry, not a stock adjustment. */
+export async function deleteReturn(id: string) {
+  return requireServer(
+    deleteDoc(doc(db, "returns", id)),
+    "Deleting a return needs a connection — the server didn't answer. Nothing was changed; try again.",
   );
 }

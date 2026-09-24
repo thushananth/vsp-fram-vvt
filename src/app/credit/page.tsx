@@ -1,12 +1,20 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import { useCustomerBills } from "@/lib/firestore/bills";
-import { allocate, outstandingLines, payCredit, useCreditPayments } from "@/lib/firestore/credit";
+import {
+  allocate,
+  deleteCreditPayment,
+  editCreditPayment,
+  outstandingLines,
+  payCredit,
+  useCreditPayments,
+} from "@/lib/firestore/credit";
 import { useAuth } from "@/lib/auth";
 import { dateAndTime, money } from "@/lib/format";
-import type { Customer } from "@/lib/types";
+import type { Customer, CreditPayment } from "@/lib/types";
 
 type Tab = "Collect" | "History";
 
@@ -273,10 +281,31 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
 
 function HistoryTab() {
   const { payments, loading } = useCreditPayments();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === "admin";
+
+  const [editing, setEditing] = useState<CreditPayment | null>(null);
+  const [deleting, setDeleting] = useState<CreditPayment | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const todayStart = new Date().setHours(0, 0, 0, 0);
   const today = payments.filter((p) => p.createdAt >= todayStart);
   const todayTotal = today.reduce((sum, p) => sum + p.amount, 0);
+
+  async function handleDelete() {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteCreditPayment(deleting.id);
+      setDeleting(null);
+    } catch (err) {
+      setDeleteError((err as Error).message);
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   return (
     <>
@@ -312,6 +341,24 @@ function HistoryTab() {
               <span className="tabular-nums text-lg font-extrabold text-success">
                 {money(p.amount)}
               </span>
+              {isAdmin && (
+                <div className="flex shrink-0 gap-1.5">
+                  <button
+                    onClick={() => setEditing(p)}
+                    aria-label="Edit payment"
+                    className="rounded-lg border border-border bg-surface p-2 text-muted"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => { setDeleting(p); setDeleteError(null); }}
+                    aria-label="Delete payment"
+                    className="rounded-lg border border-danger/30 bg-danger/10 p-2 text-danger"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
           {payments.length === 0 && (
@@ -319,6 +366,115 @@ function HistoryTab() {
           )}
         </div>
       )}
+
+      {editing && <EditPaymentSheet payment={editing} onClose={() => setEditing(null)} />}
+
+      {deleting && (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-ink/50 sm:items-center">
+          <div className="mx-auto w-full max-w-sm rounded-t-3xl bg-surface p-5 sm:rounded-3xl">
+            <h3 className="text-lg font-extrabold">Delete this payment?</h3>
+            <p className="mt-1.5 text-sm font-medium text-muted">
+              {money(deleting.amount)} from {deleting.customerName} on {dateAndTime(deleting.createdAt)}.
+              The amount goes back onto their balance. This cannot be undone.
+            </p>
+            {deleteError && (
+              <p role="alert" className="mt-3 text-xs font-bold text-danger">
+                {deleteError}
+              </p>
+            )}
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => { setDeleting(null); setDeleteError(null); }}
+                disabled={deleteBusy}
+                className="min-h-[48px] flex-1 rounded-xl border border-border text-sm font-bold text-muted disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void handleDelete()}
+                disabled={deleteBusy}
+                className="min-h-[48px] flex-1 rounded-xl bg-danger text-sm font-bold text-white disabled:opacity-40"
+              >
+                {deleteBusy ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
+  );
+}
+
+/** Change a payment's amount and/or note — reallocates it fresh, oldest outstanding first. */
+function EditPaymentSheet({ payment, onClose }: { payment: CreditPayment; onClose: () => void }) {
+  const [amountText, setAmountText] = useState(String(payment.amount));
+  const [note, setNote] = useState(payment.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const amount = Number(amountText) || 0;
+
+  async function handleSave() {
+    setSaving(true);
+    setError(null);
+    try {
+      await editCreditPayment(payment.id, { amount, note: note.trim() || null });
+      onClose();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-end bg-ink/50">
+      <div className="mx-auto w-full max-w-lg rounded-t-3xl bg-surface p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-xl font-extrabold">{payment.customerName}</div>
+            <div className="text-sm font-medium text-muted">{dateAndTime(payment.createdAt)}</div>
+          </div>
+          <button
+            onClick={onClose}
+            className="min-h-[42px] shrink-0 rounded-lg border border-border px-3.5 text-sm font-bold text-muted"
+          >
+            Close
+          </button>
+        </div>
+
+        <p className="mt-3 text-xs font-medium leading-relaxed text-muted-2">
+          Changing the amount reverses this payment and reallocates the new amount across whatever
+          is outstanding now, oldest first — it may land on different bills than the original did.
+        </p>
+
+        <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">
+          Amount received
+        </div>
+        <input
+          value={amountText}
+          onChange={(e) => setAmountText(e.target.value)}
+          inputMode="decimal"
+          className="tabular-nums h-[54px] w-full rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground px-3.5 text-2xl font-extrabold text-ink"
+        />
+
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Note (optional)"
+          className="mt-2 h-[46px] w-full rounded-xl border border-border bg-ground px-3.5 text-base outline-none focus:border-accent"
+        />
+
+        {error && <p className="mt-2 text-sm font-semibold text-danger">{error}</p>}
+
+        <button
+          onClick={() => void handleSave()}
+          disabled={saving || amount <= 0}
+          className="mt-4 min-h-[54px] w-full rounded-2xl bg-accent text-base font-bold text-white disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    </div>
   );
 }

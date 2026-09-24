@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { Search, X, FileDown } from "lucide-react";
 import {
   useProducts,
   createProduct,
   setProductImage,
   PRODUCT_UNITS,
 } from "@/lib/firestore/products";
-import { useBakeryDay, todayKey, recordBakeryIntake, updateGoodsStock } from "@/lib/firestore/bakeryDays";
+import { todayKey, updateGoodsStock } from "@/lib/firestore/bakeryDays";
 import { logReturn } from "@/lib/firestore/returns";
+import { logStockPurchase } from "@/lib/firestore/stockHistory";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/firestore/permissions";
 import { money } from "@/lib/format";
@@ -23,63 +26,85 @@ type Tab = "Bakery" | "Barcoded goods";
 export default function StockPage() {
   const today = todayKey();
   const { products, loading } = useProducts();
-  const { items: bakeryItems } = useBakeryDay(today);
   const { profile } = useAuth();
   const { permissions } = usePermissions();
   const [tab, setTab] = useState<Tab>("Bakery");
   const [editing, setEditing] = useState<Product | null>(null);
+  const [adding, setAdding] = useState<Product | null>(null);
   const [returning, setReturning] = useState<Product | null>(null);
   const [creating, setCreating] = useState(false);
+  const [search, setSearch] = useState("");
 
   const isAdmin = profile?.role === "admin";
   const canCreateItems = isAdmin || permissions.createStockItems;
   const canEditPrices = isAdmin || permissions.editStockPrices;
   const canLogReturns = isAdmin || permissions.logReturns;
+  const canViewStockReport = isAdmin || permissions.viewStockReport;
 
-  const bakeryProducts = useMemo(() => products.filter((p) => p.isBakery), [products]);
-  const goodsProducts = useMemo(() => products.filter((p) => !p.isBakery), [products]);
+  const q = search.trim().toLowerCase();
 
-  const bakeryRows = bakeryProducts.map((p) => {
-    const day = bakeryItems.find((b) => b.productId === p.id);
-    const received = day?.received ?? 0;
-    const sold = day?.sold ?? 0;
-    const returned = day?.returned ?? 0;
-    const left = Math.max(0, received - sold - returned);
-    return { product: p, received, sold, returned, left };
-  });
-
-  const stockTotals = {
-    received: bakeryRows.reduce((t, b) => t + b.received, 0),
-    sold: bakeryRows.reduce((t, b) => t + b.sold, 0),
-    left: bakeryRows.reduce((t, b) => t + b.left, 0),
-  };
+  const bakeryProducts = useMemo(() => {
+    return products.filter(
+      (p) =>
+        p.isBakery &&
+        (!q || p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode ?? "").toLowerCase().includes(q)),
+    );
+  }, [products, q]);
+  const goodsProducts = useMemo(() => {
+    return products.filter(
+      (p) =>
+        !p.isBakery &&
+        (!q || p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode ?? "").toLowerCase().includes(q)),
+    );
+  }, [products, q]);
 
   const now = Date.now();
-  const goodsRows = goodsProducts.map((p) => {
+  function toRow(p: Product) {
     const qty = p.onShelf ?? 0;
     const min = p.minLevel;
     const expSoon = p.expiryDate && new Date(p.expiryDate).getTime() - now < 30 * 24 * 3600 * 1000;
     const status = min !== null && qty <= 0 ? "Low" : min !== null && qty <= min ? "Watch" : "OK";
     return { product: p, qty, status, expSoon };
-  });
+  }
+
+  const bakeryRows = bakeryProducts.map(toRow);
+  const goodsRows = goodsProducts.map(toRow);
+  const rows = tab === "Bakery" ? bakeryRows : goodsRows;
 
   return (
     <div className="mx-auto max-w-3xl p-4 pb-8">
       <div className="flex items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight">Stock</h1>
-          <p className="text-sm font-medium text-muted">
-            {tab === "Bakery" ? "Morning intake from the van" : "Price, quantity and expiry"}
-          </p>
+          <p className="text-sm font-medium text-muted">Price, quantity and expiry</p>
         </div>
-        {canCreateItems && (
-          <button
-            onClick={() => setCreating(true)}
-            className="min-h-[46px] shrink-0 rounded-xl bg-accent px-4 text-sm font-bold text-white"
-          >
-            + New item
-          </button>
-        )}
+        <div className="flex shrink-0 gap-2">
+          {canViewStockReport && (
+            <Link
+              href="/stock/history"
+              className="flex min-h-[46px] items-center rounded-xl border border-border bg-surface px-3.5 text-sm font-bold text-muted"
+            >
+              History
+            </Link>
+          )}
+          {canViewStockReport && (
+            <Link
+              href="/stock/report"
+              className="flex min-h-[46px] items-center rounded-xl border border-border bg-surface px-3.5 text-sm font-bold text-muted"
+            >
+              <FileDown className="mr-1.5 inline h-3.5 w-3.5" />
+              Report
+            </Link>
+          )}
+          {canCreateItems && (
+            <button
+              onClick={() => setCreating(true)}
+              className="min-h-[46px] rounded-xl bg-accent px-4 text-sm font-bold text-white"
+            >
+              + New item
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-3 flex gap-1.5 rounded-xl bg-[#e9edf4] p-1">
@@ -96,75 +121,27 @@ export default function StockPage() {
         ))}
       </div>
 
+      <div className="relative mt-3">
+        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-2" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by item, category or barcode"
+          className="h-[46px] w-full rounded-xl border border-border bg-surface pl-10 pr-9 text-sm font-medium outline-none focus:border-accent"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-2"
+            aria-label="Clear search"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
       {loading ? (
         <p className="py-8 text-center text-muted">Loading…</p>
-      ) : tab === "Bakery" ? (
-        <div className="mt-3.5">
-          <div className="mb-3 flex gap-2">
-            <div className="flex-1 rounded-xl border border-border bg-surface px-3.5 py-3">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-2">Received</div>
-              <div className="tabular-nums text-xl font-extrabold">{stockTotals.received}</div>
-            </div>
-            <div className="flex-1 rounded-xl border border-border bg-surface px-3.5 py-3">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-muted-2">Sold</div>
-              <div className="tabular-nums text-xl font-extrabold">{stockTotals.sold}</div>
-            </div>
-            <div className="flex-1 rounded-xl border border-warning/30 bg-warning/5 px-3.5 py-3">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-warning">On shelf</div>
-              <div className="tabular-nums text-xl font-extrabold text-warning">{stockTotals.left}</div>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            {bakeryRows.map((row) => (
-              <div
-                key={row.product.id}
-                className="flex min-h-[72px] items-center gap-2 rounded-2xl border border-border bg-surface px-3.5 py-3"
-              >
-                <button onClick={() => setEditing(row.product)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-                  <ProductThumb
-                    name={row.product.name}
-                    imageUrl={row.product.imageUrl}
-                    size="sm"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-base font-bold">{row.product.name}</div>
-                    <div className="tabular-nums text-xs font-medium text-muted-2">
-                      {money(row.product.price)} each
-                    </div>
-                  </div>
-                  <div className="w-16 text-right">
-                    <div className="tabular-nums text-lg font-extrabold">{row.received}</div>
-                    <div className="text-[10px] font-bold uppercase tracking-wide text-muted-2">taken in</div>
-                  </div>
-                  <div className="w-16 text-right">
-                    <div className={`tabular-nums text-lg font-extrabold ${row.left <= 0 ? "text-muted-2" : "text-warning"}`}>
-                      {row.left}
-                    </div>
-                    <div className="text-[10px] font-bold uppercase tracking-wide text-muted-2">on shelf</div>
-                  </div>
-                </button>
-                {canLogReturns && (
-                  <button
-                    onClick={() => setReturning(row.product)}
-                    className="shrink-0 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-[11px] font-bold text-warning"
-                  >
-                    Return
-                  </button>
-                )}
-              </div>
-            ))}
-            {bakeryRows.length === 0 && (
-              <p className="py-8 text-center text-muted">
-                No bakery items yet{canCreateItems ? " — tap + New item to add one." : "."}
-              </p>
-            )}
-          </div>
-          <p className="mt-3 text-xs font-medium leading-relaxed text-muted-2">
-            Morning intake — the tray count the bakery van drops off. Sold and returns are taken off
-            this figure through the day.
-          </p>
-        </div>
       ) : (
         <div className="mt-3.5">
           <div className="overflow-hidden rounded-2xl border border-border bg-surface">
@@ -175,41 +152,63 @@ export default function StockPage() {
               <div className="w-16 text-right">In stock</div>
               <div className="w-16 text-right">Status</div>
             </div>
-            {goodsRows.map((row) => (
-              <button
+            {rows.map((row) => (
+              <div
                 key={row.product.id}
-                onClick={() => setEditing(row.product)}
-                className="flex min-h-[66px] w-full items-center gap-2.5 border-t border-[#f1f5f9] px-3.5 py-3 text-left"
+                className="flex min-h-[66px] items-center gap-2.5 border-t border-[#f1f5f9] px-3.5 py-3"
               >
-                <ProductThumb name={row.product.name} imageUrl={row.product.imageUrl} size="sm" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[15px] font-bold">{row.product.name}</div>
-                  {row.product.expiryDate && (
-                    <div className={`text-[11px] font-medium ${row.expSoon ? "text-warning" : "text-muted-2"}`}>
-                      Exp {row.product.expiryDate}
-                    </div>
-                  )}
-                </div>
-                <div className="tabular-nums w-20 text-right text-sm font-bold">{money(row.product.price)}</div>
-                <div className="tabular-nums w-16 text-right text-[15px] font-extrabold">{row.qty}</div>
-                <div className="w-16 text-right">
-                  <span
-                    className={`inline-block rounded-md px-1.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
-                      row.status === "Low"
-                        ? "bg-danger/10 text-danger"
-                        : row.status === "Watch"
-                          ? "bg-warning/10 text-warning"
-                          : "bg-success/10 text-success"
-                    }`}
+                <button
+                  onClick={() => setEditing(row.product)}
+                  className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                >
+                  <ProductThumb name={row.product.name} imageUrl={row.product.imageUrl} size="sm" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[15px] font-bold">{row.product.name}</div>
+                    {row.product.expiryDate && (
+                      <div className={`text-[11px] font-medium ${row.expSoon ? "text-warning" : "text-muted-2"}`}>
+                        Exp {row.product.expiryDate}
+                      </div>
+                    )}
+                  </div>
+                  <div className="tabular-nums w-20 text-right text-sm font-bold">{money(row.product.price)}</div>
+                  <div className="tabular-nums w-16 text-right text-[15px] font-extrabold">{row.qty}</div>
+                  <div className="w-16 text-right">
+                    <span
+                      className={`inline-block rounded-md px-1.5 py-1 text-[10px] font-bold uppercase tracking-wide ${
+                        row.status === "Low"
+                          ? "bg-danger/10 text-danger"
+                          : row.status === "Watch"
+                            ? "bg-warning/10 text-warning"
+                            : "bg-success/10 text-success"
+                      }`}
+                    >
+                      {row.status}
+                    </span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setAdding(row.product)}
+                  className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-2 text-[11px] font-bold text-accent"
+                >
+                  + Stock
+                </button>
+                {tab === "Bakery" && canLogReturns && (
+                  <button
+                    onClick={() => setReturning(row.product)}
+                    className="shrink-0 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-[11px] font-bold text-warning"
                   >
-                    {row.status}
-                  </span>
-                </div>
-              </button>
+                    Return
+                  </button>
+                )}
+              </div>
             ))}
-            {goodsRows.length === 0 && (
+            {rows.length === 0 && (
               <p className="p-6 text-center text-muted">
-                No barcoded goods yet{canCreateItems ? " — tap + New item to add one." : "."}
+                {q
+                  ? "No items match your search."
+                  : `No ${tab === "Bakery" ? "bakery items" : "barcoded goods"} yet${
+                      canCreateItems ? " — tap + New item to add one." : "."
+                    }`}
               </p>
             )}
           </div>
@@ -219,13 +218,14 @@ export default function StockPage() {
       {editing && (
         <StockEditSheet
           product={editing}
-          isBakery={tab === "Bakery"}
-          today={today}
-          currentReceived={bakeryItems.find((b) => b.productId === editing.id)?.received ?? 0}
           canEditPrice={canEditPrices}
           canSeeCost={isAdmin}
           onClose={() => setEditing(null)}
         />
+      )}
+
+      {adding && (
+        <AddStockSheet product={adding} onClose={() => setAdding(null)} />
       )}
 
       {returning && profile && (
@@ -524,7 +524,7 @@ function QuickReturnSheet({
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-xl font-extrabold">Return — {product.name}</h3>
-            <p className="text-sm font-medium text-muted">Logged against today&apos;s bakery day</p>
+            <p className="text-sm font-medium text-muted">Logged against today&apos;s date</p>
           </div>
           <button onClick={onClose} className="min-h-[42px] rounded-lg border border-border px-3.5 text-sm font-bold text-muted">
             Close
@@ -573,27 +573,133 @@ function QuickReturnSheet({
   );
 }
 
+/**
+ * The fast path for "a delivery came in" — available quantity and how much
+ * to add, nothing else. Price, cost, expiry and min/max stay whatever they
+ * already were; StockEditSheet is still where those get changed.
+ */
+function AddStockSheet({ product, onClose }: { product: Product; onClose: () => void }) {
+  const { profile, user } = useAuth();
+  const available = product.onShelf ?? 0;
+  const [addAmount, setAddAmount] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const newTotal = available + addAmount;
+  const chips = [5, 10, 20, 40];
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await updateGoodsStock({
+        product,
+        qty: newTotal,
+        price: product.price,
+        costPrice: product.costPrice,
+        expiryDate: product.expiryDate,
+        minLevel: product.minLevel,
+        maxLevel: product.maxLevel,
+      });
+      if (addAmount > 0) {
+        await logStockPurchase({
+          productId: product.id,
+          name: product.name,
+          qty: addAmount,
+          price: product.price,
+          costPrice: product.costPrice,
+          byUserId: profile?.uid ?? user?.uid ?? "",
+        });
+      }
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-end bg-ink/50">
+      <div className="mx-auto flex w-full max-w-lg flex-col gap-3 rounded-t-3xl bg-surface p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-xl font-extrabold">{product.name}</h3>
+            <p className="text-sm font-medium text-muted">Add stock</p>
+          </div>
+          <button onClick={onClose} className="min-h-[42px] rounded-lg border border-border px-3.5 text-sm font-bold text-muted">
+            Close
+          </button>
+        </div>
+
+        <div className="mt-1 flex items-center justify-between rounded-xl bg-ground px-3.5 py-3">
+          <span className="text-sm font-semibold text-muted">Available now</span>
+          <span className="tabular-nums text-lg font-extrabold">{available}</span>
+        </div>
+
+        <div className="mb-2 mt-2 text-[11px] font-bold uppercase tracking-wider text-muted-2">
+          Add stock
+        </div>
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => setAddAmount((q) => Math.max(0, q - 1))}
+            className="h-[54px] w-[54px] rounded-2xl border border-border text-2xl font-bold"
+          >
+            −
+          </button>
+          <input
+            value={addAmount}
+            onChange={(e) => setAddAmount(Math.max(0, Number(e.target.value) || 0))}
+            inputMode="numeric"
+            className="tabular-nums h-[54px] flex-1 rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground text-center text-2xl font-extrabold text-ink"
+          />
+          <button
+            onClick={() => setAddAmount((q) => q + 1)}
+            className="h-[54px] w-[54px] rounded-2xl bg-accent text-2xl font-bold text-white"
+          >
+            +
+          </button>
+        </div>
+        <div className="flex gap-2">
+          {chips.map((c) => (
+            <button
+              key={c}
+              onClick={() => setAddAmount((q) => q + c)}
+              className="tabular-nums flex-1 min-h-[42px] rounded-xl border border-border text-sm font-bold text-muted"
+            >
+              +{c}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between rounded-xl bg-accent/5 px-3.5 py-3">
+          <span className="text-sm font-semibold text-accent">New total</span>
+          <span className="tabular-nums text-lg font-extrabold text-accent">{newTotal}</span>
+        </div>
+
+        <button
+          onClick={() => void handleSave()}
+          disabled={saving || addAmount <= 0}
+          className="mt-2 min-h-[52px] rounded-2xl bg-accent text-base font-bold text-white disabled:opacity-50"
+        >
+          {saving ? "Saving…" : `Add ${addAmount || ""} to stock`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function StockEditSheet({
   product,
-  isBakery,
-  today,
-  currentReceived,
   canEditPrice,
   canSeeCost,
   onClose,
 }: {
   product: Product;
-  isBakery: boolean;
-  today: string;
-  currentReceived: number;
   canEditPrice: boolean;
   canSeeCost: boolean;
   onClose: () => void;
 }) {
+  const { profile, user } = useAuth();
   // "Available" is what's already on the books; the user only types how
   // much they're ADDING — the new total is available + add, never typed
   // directly, so a cashier can't accidentally overwrite the real count.
-  const available = isBakery ? currentReceived : (product.onShelf ?? 0);
+  const available = product.onShelf ?? 0;
   const [addAmount, setAddAmount] = useState(0);
   const [price, setPrice] = useState(product.lastPrice || product.price);
   const [costPrice, setCostPrice] = useState(product.costPrice);
@@ -604,7 +710,7 @@ function StockEditSheet({
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState<string | null>(null);
 
-  const chips = isBakery ? [5, 10, 20, 40] : [10, 20, 40, 80];
+  const chips = [5, 10, 20, 40];
 
   /**
    * The photo saves on its own, the moment it is chosen — it has nothing to do
@@ -647,25 +753,23 @@ function StockEditSheet({
     try {
       const min = minLevel === "" ? null : Number(minLevel);
       const max = maxLevel === "" ? null : Number(maxLevel);
-      if (isBakery) {
-        await recordBakeryIntake({
-          date: today,
-          product,
-          received: newTotal,
+      await updateGoodsStock({
+        product,
+        qty: newTotal,
+        price,
+        costPrice,
+        expiryDate: expiryDate || null,
+        minLevel: min,
+        maxLevel: max,
+      });
+      if (addAmount > 0) {
+        await logStockPurchase({
+          productId: product.id,
+          name: product.name,
+          qty: addAmount,
           price,
           costPrice,
-          minLevel: min,
-          maxLevel: max,
-        });
-      } else {
-        await updateGoodsStock({
-          product,
-          qty: newTotal,
-          price,
-          costPrice,
-          expiryDate: expiryDate || null,
-          minLevel: min,
-          maxLevel: max,
+          byUserId: profile?.uid ?? user?.uid ?? "",
         });
       }
       onClose();
@@ -680,9 +784,7 @@ function StockEditSheet({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xl font-extrabold">{product.name}</div>
-            <div className="text-sm font-medium text-muted">
-              {isBakery ? "Morning intake" : "Price & stock"}
-            </div>
+            <div className="text-sm font-medium text-muted">Price & stock</div>
           </div>
           <button onClick={onClose} className="min-h-[42px] rounded-lg border border-border px-3.5 text-sm font-bold text-muted">
             Close
@@ -803,19 +905,15 @@ function StockEditSheet({
           </>
         )}
 
-        {!isBakery && (
-          <>
-            <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">
-              Expiry date
-            </div>
-            <input
-              type="date"
-              value={expiryDate}
-              onChange={(e) => setExpiryDate(e.target.value)}
-              className="h-[50px] w-full rounded-xl border-[1.5px] border-[#dbe3ee] bg-ground px-3.5 text-base font-medium text-ink"
-            />
-          </>
-        )}
+        <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">
+          Expiry date
+        </div>
+        <input
+          type="date"
+          value={expiryDate}
+          onChange={(e) => setExpiryDate(e.target.value)}
+          className="h-[50px] w-full rounded-xl border-[1.5px] border-[#dbe3ee] bg-ground px-3.5 text-base font-medium text-ink"
+        />
 
         <div className="mb-2 mt-4 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-2">
           Min &amp; max

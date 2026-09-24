@@ -26,8 +26,8 @@ const SECURITY_TOGGLES: { key: keyof StoreSettings; label: string; body: string 
 const TOGGLES: { key: keyof CashierPermissions; label: string; body: string }[] = [
   {
     key: "voidBills",
-    label: "Void bills",
-    body: "Let cashiers void a bill from the Bills screen, not just admins.",
+    label: "Delete bills",
+    body: "Let cashiers delete a bill from the Bills screen, not just admins.",
   },
   {
     key: "reprintBills",
@@ -58,6 +58,11 @@ const TOGGLES: { key: keyof CashierPermissions; label: string; body: string }[] 
     key: "viewReports",
     label: "View day reports",
     body: "Let cashiers open the Report screen. Dashboard stays admin-only regardless.",
+  },
+  {
+    key: "viewStockReport",
+    label: "View stock report & history",
+    body: "Let cashiers open Stock → Report and Stock → History, including stock value and cost.",
   },
 ];
 

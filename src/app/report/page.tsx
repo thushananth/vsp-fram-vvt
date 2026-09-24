@@ -3,10 +3,19 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useBills } from "@/lib/firestore/bills";
-import { useBakeryDay, todayKey } from "@/lib/firestore/bakeryDays";
+import { todayKey } from "@/lib/firestore/bakeryDays";
+import { useAuth } from "@/lib/auth";
 import Stat from "@/components/ui/Stat";
 import { money } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
+
+interface StockSaleRow {
+  productId: string;
+  name: string;
+  qty: number;
+  revenue: number;
+  cost: number;
+}
 
 const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [
   { mode: "today", label: "Today" },
@@ -19,6 +28,9 @@ const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [
 export default function ReportPage() {
   const today = todayKey();
   const { bills, loading: billsLoading } = useBills();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === "admin";
+  const [stockSort, setStockSort] = useState<"qty" | "profit">("qty");
 
   const [rangeMode, setRangeMode] = useState<RangeMode>("today");
   const [customFrom, setCustomFrom] = useState(today);
@@ -28,20 +40,12 @@ export default function ReportPage() {
     [rangeMode, customFrom, customTo],
   );
 
-  // Bakery reconciliation + return log are keyed by a single day — for a
-  // multi-day range we still need to call these hooks, so fall back to
-  // today's key and simply don't render the sections.
-  const { items: bakeryItems, loading: bakeryLoading } = useBakeryDay(range.singleDayKey ?? today);
-
-
   const rangeBills = useMemo(
     () => bills.filter((b) => b.createdAt >= range.startMs && b.createdAt < range.endMs),
     [bills, range],
   );
   const paidBills = rangeBills.filter((b) => b.status === "paid");
   const salesTotal = paidBills.reduce((sum, b) => sum + b.total, 0);
-  const bakerySoldQty = bakeryItems.reduce((sum, i) => sum + i.sold, 0);
-  const bakeryReturnedQty = bakeryItems.reduce((sum, i) => sum + i.returned, 0);
   const unsyncedCount = rangeBills.filter((b) => !b.synced).length;
 
   const stats = [
@@ -57,18 +61,6 @@ export default function ReportPage() {
       value: money(paidBills.length ? Math.round(salesTotal / paidBills.length) : 0),
       note: "Cash only",
       color: "text-muted",
-    },
-    {
-      label: "Bakery sold",
-      value: range.singleDayKey ? String(bakerySoldQty) : "—",
-      note: range.singleDayKey ? "units" : "single day only",
-      color: "text-muted",
-    },
-    {
-      label: "Returns",
-      value: range.singleDayKey ? String(bakeryReturnedQty) : "—",
-      note: range.singleDayKey ? "units" : "single day only",
-      color: "text-warning",
     },
     {
       label: "Unsynced",
@@ -108,8 +100,27 @@ export default function ReportPage() {
     }));
   }, [paidBills, isSingleDay]);
 
+  // Units moved per product, in this range — the fast movers and (for
+  // admins) the ones actually worth the shelf space.
+  const stockSales = useMemo(() => {
+    const map = new Map<string, StockSaleRow>();
+    for (const b of paidBills) {
+      for (const l of b.lines) {
+        const cur = map.get(l.productId) ?? { productId: l.productId, name: l.name, qty: 0, revenue: 0, cost: 0 };
+        cur.qty += l.qty;
+        cur.revenue += l.price * l.qty;
+        cur.cost += (l.costPrice ?? 0) * l.qty;
+        map.set(l.productId, cur);
+      }
+    }
+    const rows = [...map.values()];
+    rows.sort((a, b) =>
+      stockSort === "qty" ? b.qty - a.qty : b.revenue - b.cost - (a.revenue - a.cost),
+    );
+    return rows;
+  }, [paidBills, stockSort]);
 
-  const loading = billsLoading || (isSingleDay && bakeryLoading);
+  const loading = billsLoading;
 
   return (
     <div className="mx-auto max-w-3xl p-4 pb-8">
@@ -169,32 +180,6 @@ export default function ReportPage() {
             ))}
           </div>
 
-          {isSingleDay && (
-            <>
-              <h2 className="mb-2.5 mt-6 text-[17px] font-bold">Bakery items — in, sold, returned</h2>
-              <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-                <div className="flex gap-2 bg-ground px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wider text-muted">
-                  <div className="flex-1">Item</div>
-                  <div className="w-14 text-right">In</div>
-                  <div className="w-14 text-right">Sold</div>
-                  <div className="w-16 text-right">Return</div>
-                </div>
-                {bakeryItems.length === 0 ? (
-                  <p className="p-4 text-center text-sm text-muted">No bakery intake recorded this day.</p>
-                ) : (
-                  bakeryItems.map((b) => (
-                    <div key={b.productId} className="flex items-center gap-2 border-t border-[#f1f5f9] px-3.5 py-2.5">
-                      <div className="flex-1 text-sm font-semibold">{b.name}</div>
-                      <div className="tabular-nums w-14 text-right text-sm font-medium text-muted">{b.received}</div>
-                      <div className="tabular-nums w-14 text-right text-sm font-bold">{b.sold}</div>
-                      <div className="tabular-nums w-16 text-right text-sm font-bold text-warning">{b.returned}</div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          )}
-
           <h2 className="mb-2.5 mt-6 text-[17px] font-bold">
             {isSingleDay ? "Sales by hour" : "Sales by day"}
           </h2>
@@ -213,6 +198,62 @@ export default function ReportPage() {
             )}
           </div>
 
+          <div className="mb-2.5 mt-6 flex items-center justify-between gap-3">
+            <h2 className="text-[17px] font-bold">Stock sales — units moved</h2>
+            <div className="flex gap-1.5 rounded-xl bg-[#e9edf4] p-1">
+              <button
+                onClick={() => setStockSort("qty")}
+                className={`min-h-[34px] rounded-lg px-2.5 text-[12px] font-bold ${
+                  stockSort === "qty" ? "bg-white shadow-sm" : "text-muted"
+                }`}
+              >
+                Most sold
+              </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setStockSort("profit")}
+                  className={`min-h-[34px] rounded-lg px-2.5 text-[12px] font-bold ${
+                    stockSort === "profit" ? "bg-white shadow-sm" : "text-muted"
+                  }`}
+                >
+                  Most profit
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="overflow-x-auto rounded-2xl border border-border bg-surface">
+            <table className="w-full min-w-[480px] text-sm">
+              <thead>
+                <tr className="bg-ground text-[10px] font-bold uppercase tracking-wider text-muted">
+                  <th className="px-3.5 py-2.5 text-left">Item</th>
+                  <th className="px-3.5 py-2.5 text-right">Units sold</th>
+                  <th className="px-3.5 py-2.5 text-right">Revenue</th>
+                  {isAdmin && <th className="px-3.5 py-2.5 text-right">Cost</th>}
+                  {isAdmin && <th className="px-3.5 py-2.5 text-right">Profit</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {stockSales.map((r) => (
+                  <tr key={r.productId} className="border-t border-[#f1f5f9]">
+                    <td className="max-w-[180px] truncate px-3.5 py-2.5 font-semibold">{r.name}</td>
+                    <td className="tabular-nums px-3.5 py-2.5 text-right font-bold">{r.qty}</td>
+                    <td className="tabular-nums px-3.5 py-2.5 text-right text-muted-2">{money(r.revenue)}</td>
+                    {isAdmin && (
+                      <td className="tabular-nums px-3.5 py-2.5 text-right text-muted-2">{money(r.cost)}</td>
+                    )}
+                    {isAdmin && (
+                      <td className="tabular-nums px-3.5 py-2.5 text-right font-bold text-success">
+                        {money(r.revenue - r.cost)}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {stockSales.length === 0 && (
+              <p className="p-6 text-center text-sm text-muted">No sales in this range.</p>
+            )}
+          </div>
         </>
       )}
 

@@ -22,10 +22,11 @@ const firebaseConfig = {
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
-// UAT build reads/writes a *named* Firestore database, separate from the
-// (default) database the Flutter app uses, so we never touch live data.
+// This build reads/writes a *named* Firestore database, separate from the
+// (default) database the old Flutter app used — customers and stock were
+// migrated across once (see functions/scripts/migrate-from-flutter.cjs).
 const FIRESTORE_DATABASE_ID =
-  process.env.NEXT_PUBLIC_FIRESTORE_DATABASE_ID ?? "bake-shop-uat-v2";
+  process.env.NEXT_PUBLIC_FIRESTORE_DATABASE_ID ?? "bake-shop-live-v2";
 
 export const app: FirebaseApp = getApps().length
   ? getApps()[0]

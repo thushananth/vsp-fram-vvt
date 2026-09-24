@@ -4,8 +4,7 @@ export interface DateRange {
   label: string;
   startMs: number;
   endMs: number; // exclusive
-  /** Set only when the range is exactly one calendar day — gates the
-   * per-day bakery/return sections, which are keyed by a single date. */
+  /** Set only when the range is exactly one calendar day. */
   singleDayKey: string | null;
 }
 

@@ -52,13 +52,6 @@ interface BillDraft {
   paymentType: PaymentType;
   customerId: string | null;
   customerName: string | null;
-  /**
-   * Which of the lines come off the bakery shelf. Decided by the caller from
-   * `product.isBakery` rather than by reading the day's items — a cache read
-   * would be empty on a till that didn't record this morning's intake, and a
-   * server read would hang on weak wifi.
-   */
-  bakeryProductIds: string[];
 }
 
 function round2(n: number): number {
@@ -87,8 +80,6 @@ function settlement(draft: { total: number; paid: number }): { paid: number; due
  * whole path exists to avoid. It hands the pending commit back to the caller.
  */
 function commitBill(draft: BillDraft): Promise<void> {
-  const date = new Date(draft.createdAt).toISOString().slice(0, 10);
-  const bakery = new Set(draft.bakeryProductIds);
   const { paid, due } = settlement(draft);
 
   const batch = writeBatch(db);
@@ -117,17 +108,6 @@ function commitBill(draft: BillDraft): Promise<void> {
     due,
   });
 
-  for (const line of draft.lines) {
-    if (!bakery.has(line.productId)) continue;
-    // `name` too, so a sale of something never booked in this morning creates
-    // a readable day-item rather than a nameless one.
-    batch.set(
-      doc(db, "bakeryDays", date, "items", line.productId),
-      { name: line.name, sold: increment(line.qty) },
-      { merge: true },
-    );
-  }
-
   // Only the unpaid remainder goes on the balance — a bill part-settled at the
   // till must not put its whole total on the customer's account.
   if (due > 0 && draft.customerId) {
@@ -155,7 +135,6 @@ export function createBill(params: {
   paymentType: PaymentType;
   customerId: string | null;
   customerName: string | null;
-  bakeryProductIds: string[];
   paid: number;
 }): CreatedBill {
   // A backstop, not the user-facing check — the till blocks a short payment
@@ -195,8 +174,8 @@ export function createBill(params: {
 
 /**
  * One in-flight re-send per bill. The wait below gives up after a few seconds
- * but the commit does not, and a second batch would apply a *second* set of
- * `increment()`s — doubling the day's sold count and the customer's balance.
+ * but the commit does not, and a second batch would apply a *second*
+ * `increment()` — doubling the customer's balance.
  */
 const resending = new Map<string, Promise<void>>();
 
@@ -228,15 +207,14 @@ export function retryJournalledBill(entry: JournalEntry): Promise<void> {
 }
 
 /**
- * Void a bill and put its bakery quantities back — atomically. An unpaid
- * credit bill also comes off the customer's balance; what they already paid
- * against it stays paid, since that money genuinely changed hands.
+ * Void a bill — atomically. An unpaid credit bill also comes off the
+ * customer's balance; what they already paid against it stays paid, since
+ * that money genuinely changed hands.
  *
  * Online-only, unlike createBill: a void is a correction that can wait for the
  * connection, and the clamped give-back below has no offline-safe form.
  */
 export async function voidBill(billId: string) {
-  const today = new Date().toISOString().slice(0, 10);
   return requireServer(
     runTransaction(db, async (tx) => {
       const billRef = doc(db, "bills", billId);
@@ -244,16 +222,6 @@ export async function voidBill(billId: string) {
       if (!billSnap.exists()) throw new Error("Bill not found");
       const bill = billSnap.data() as Bill;
       if (bill.status === "void") return;
-
-      // Reads first, writes after — a transaction rule.
-      const dayItems: { id: string; sold: number; qty: number }[] = [];
-      for (const line of bill.lines) {
-        const dayItemRef = doc(db, "bakeryDays", today, "items", line.productId);
-        const snap = await tx.get(dayItemRef);
-        if (snap.exists()) {
-          dayItems.push({ id: line.productId, sold: snap.data()?.sold ?? 0, qty: line.qty });
-        }
-      }
 
       const outstanding = bill.due ?? 0;
       const customerRef = bill.customerId ? doc(db, "customers", bill.customerId) : null;
@@ -264,14 +232,6 @@ export async function voidBill(billId: string) {
       }
 
       tx.set(billRef, { status: "void", due: 0 }, { merge: true });
-
-      for (const item of dayItems) {
-        tx.set(
-          doc(db, "bakeryDays", today, "items", item.id),
-          { sold: Math.max(0, item.sold - item.qty) },
-          { merge: true },
-        );
-      }
 
       if (customerRef && outstanding > 0) {
         tx.set(

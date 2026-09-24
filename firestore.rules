@@ -65,13 +65,25 @@ service cloud.firestore {
     match /creditPayments/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn();
-      allow update, delete: if false;
+      // A correction, not a routine edit — same bar as voiding a bill.
+      allow update, delete: if isAdmin();
     }
 
     match /returns/{id} {
       allow read: if isSignedIn();
-      allow create: if isAdmin() || cashierCan('logReturns');
-      allow update, delete: if isAdmin();
+      allow create, delete: if isAdmin() || cashierCan('logReturns');
+      allow update: if isAdmin();
+    }
+
+    // A log of stock purchases only, written whenever someone adds stock
+    // (Stock → + Stock / edit sheet). Append-only, like returns — nobody
+    // edits a purchase entry after the fact.
+    match /stockHistory/{id} {
+      allow read: if isSignedIn();
+      // Same bar as writing the product itself (see /products above) — this
+      // is just its paper trail.
+      allow create: if isSignedIn();
+      allow update, delete: if false;
     }
 
     match /counters/{id} {

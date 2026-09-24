@@ -37,9 +37,6 @@ export interface JournalEntry {
   paymentType: PaymentType;
   customerId: string | null;
   customerName: string | null;
-  /** Lines that come off the bakery shelf — a re-send has to decrement the
-   *  same day-items the original did. */
-  bakeryProductIds: string[];
   state: "pending" | "failed";
   /** Why the server refused it. Only set once state is "failed". */
   error: string | null;

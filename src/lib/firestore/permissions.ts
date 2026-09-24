@@ -18,6 +18,7 @@ export interface CashierPermissions {
   createStockItems: boolean;
   logReturns: boolean;
   viewReports: boolean;
+  viewStockReport: boolean;
   reprintBills: boolean;
 }
 
@@ -28,6 +29,7 @@ export const DEFAULT_PERMISSIONS: CashierPermissions = {
   createStockItems: false,
   logReturns: true,
   viewReports: true,
+  viewStockReport: false,
   reprintBills: true,
 };
 
