@@ -9,7 +9,7 @@ import { printReceipt } from "@/lib/printer";
 import { money, dateAndTime } from "@/lib/format";
 import { useBillJournal, type JournalEntry } from "@/lib/billJournal";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
-import { todayKey } from "@/lib/firestore/bakeryDays";
+import { todayKey } from "@/lib/firestore/farmDays";
 import Stat from "@/components/ui/Stat";
 import {
   billToExportable,
@@ -154,7 +154,7 @@ export default function BillsPage() {
     if (!canReprint) return;
     printReceipt({
       lines: [
-        "Bakery POS",
+        "Chicken Farm POS",
         `Bill #${bill.no}`,
         ...(bill.customerName ? [`Customer: ${bill.customerName}`] : []),
         "--------------------------------",

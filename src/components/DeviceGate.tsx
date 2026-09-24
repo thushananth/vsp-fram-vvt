@@ -243,7 +243,7 @@ function Frame({
       />
       <div className="relative mb-8 flex flex-col items-center">
         <BrandMark size="md" />
-        <h1 className="mt-4 text-xl font-extrabold tracking-tight">Bakery POS</h1>
+        <h1 className="mt-4 text-xl font-extrabold tracking-tight">Chicken Farm POS</h1>
       </div>
 
       <div className="relative flex w-full max-w-sm flex-col items-center gap-4 rounded-3xl border border-white/10 bg-white/[0.04] p-6 text-center">

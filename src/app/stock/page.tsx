@@ -9,7 +9,7 @@ import {
   setProductImage,
   PRODUCT_UNITS,
 } from "@/lib/firestore/products";
-import { todayKey, updateGoodsStock } from "@/lib/firestore/bakeryDays";
+import { todayKey, updateGoodsStock } from "@/lib/firestore/farmDays";
 import { logReturn } from "@/lib/firestore/returns";
 import { logStockPurchase } from "@/lib/firestore/stockHistory";
 import { useAuth } from "@/lib/auth";
@@ -21,14 +21,14 @@ import ProductThumb from "@/components/ui/ProductThumb";
 import ProductImageField from "@/components/ProductImageField";
 import { deleteProductImage, uploadProductImage } from "@/lib/productImages";
 
-type Tab = "Bakery" | "Barcoded goods";
+type Tab = "Farm Products" | "Barcoded goods";
 
 export default function StockPage() {
   const today = todayKey();
   const { products, loading } = useProducts();
   const { profile } = useAuth();
   const { permissions } = usePermissions();
-  const [tab, setTab] = useState<Tab>("Bakery");
+  const [tab, setTab] = useState<Tab>("Farm Products");
   const [editing, setEditing] = useState<Product | null>(null);
   const [adding, setAdding] = useState<Product | null>(null);
   const [returning, setReturning] = useState<Product | null>(null);
@@ -69,7 +69,7 @@ export default function StockPage() {
 
   const bakeryRows = bakeryProducts.map(toRow);
   const goodsRows = goodsProducts.map(toRow);
-  const rows = tab === "Bakery" ? bakeryRows : goodsRows;
+  const rows = tab === "Farm Products" ? bakeryRows : goodsRows;
 
   return (
     <div className="mx-auto max-w-3xl p-4 pb-8">
@@ -108,7 +108,7 @@ export default function StockPage() {
       </div>
 
       <div className="mt-3 flex gap-1.5 rounded-xl bg-[#e9edf4] p-1">
-        {(["Bakery", "Barcoded goods"] as Tab[]).map((t) => (
+        {(["Farm Products", "Barcoded goods"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -192,7 +192,7 @@ export default function StockPage() {
                 >
                   + Stock
                 </button>
-                {tab === "Bakery" && canLogReturns && (
+                {tab === "Farm Products" && canLogReturns && (
                   <button
                     onClick={() => setReturning(row.product)}
                     className="shrink-0 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-[11px] font-bold text-warning"
@@ -206,7 +206,7 @@ export default function StockPage() {
               <p className="p-6 text-center text-muted">
                 {q
                   ? "No items match your search."
-                  : `No ${tab === "Bakery" ? "bakery items" : "barcoded goods"} yet${
+                  : `No ${tab === "Farm Products" ? "farm products" : "barcoded goods"} yet${
                       canCreateItems ? " — tap + New item to add one." : "."
                     }`}
               </p>
@@ -239,7 +239,7 @@ export default function StockPage() {
 
       {creating && (
         <NewItemSheet
-          defaultIsBakery={tab === "Bakery"}
+          defaultIsBakery={tab === "Farm Products"}
           canSeeCost={isAdmin}
           onClose={() => setCreating(false)}
         />
@@ -262,7 +262,7 @@ function NewItemSheet({
   const [price, setPrice] = useState(0);
   const [costPrice, setCostPrice] = useState(0);
   const [unit, setUnit] = useState<string>("pieces");
-  const [category, setCategory] = useState<string>(defaultIsBakery ? "Bakery" : "Drinks");
+  const [category, setCategory] = useState<string>(defaultIsBakery ? "Whole Chicken" : "Feed");
   const [barcode, setBarcode] = useState("");
   const [minLevel, setMinLevel] = useState("");
   const [maxLevel, setMaxLevel] = useState("");
@@ -345,7 +345,7 @@ function NewItemSheet({
             onClick={() => setIsBakery(true)}
             className={`min-h-[42px] flex-1 rounded-lg text-sm font-bold ${isBakery ? "bg-white shadow-sm" : "text-muted"}`}
           >
-            Bakery
+            Farm Products
           </button>
           <button
             type="button"

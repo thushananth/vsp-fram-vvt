@@ -10,8 +10,8 @@ const jakarta = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Bakery POS",
-  description: "Shop POS for a bakery outlet — powered by 5XCODES (5xcodes.com)",
+  title: "Chicken Farm POS",
+  description: "Farm POS for a chicken farm — bills, stock and credit, online or off.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

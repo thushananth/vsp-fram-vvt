@@ -47,12 +47,12 @@ const TOGGLES: { key: keyof CashierPermissions; label: string; body: string }[] 
   {
     key: "createStockItems",
     label: "Create new stock items",
-    body: "Let cashiers add brand-new bakery products / barcoded goods from Stock → New item.",
+    body: "Let cashiers add brand-new farm products / barcoded goods from Stock → New item.",
   },
   {
     key: "logReturns",
     label: "Log returns",
-    body: "Let cashiers log a bakery return from Report or Stock.",
+    body: "Let cashiers log a farm return from Report or Stock.",
   },
   {
     key: "viewReports",

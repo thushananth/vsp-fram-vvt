@@ -24,7 +24,7 @@ export default function Splash() {
           className="animate-rise mt-7 text-[26px] font-extrabold leading-none tracking-tight"
           style={{ animationDelay: "90ms" }}
         >
-          Bakery POS
+          Chicken Farm POS
         </h1>
 
         <p

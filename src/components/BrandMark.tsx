@@ -1,5 +1,5 @@
 /**
- * The one Bakery POS logo mark. Splash, login and the sidebar all render this,
+ * The one Chicken Farm POS logo mark. Splash, login and the sidebar all render this,
  * so the first thing a cashier sees is the same mark in all three places —
  * change it here and it changes everywhere.
  */
@@ -22,14 +22,14 @@ export default function BrandMark({
   return (
     <span
       aria-hidden
-      className={`relative isolate flex shrink-0 items-center justify-center overflow-hidden bg-[linear-gradient(150deg,#4C8DFF_0%,#2563EB_45%,#1D4ED8_100%)] shadow-[0_10px_28px_-10px_rgba(37,99,235,0.9)] ring-1 ring-inset ring-white/25 ${s.box} ${className}`}
+      className={`relative isolate flex shrink-0 items-center justify-center overflow-hidden bg-[linear-gradient(150deg,#F59E0B_0%,#D97706_45%,#B45309_100%)] shadow-[0_10px_28px_-10px_rgba(217,119,6,0.9)] ring-1 ring-inset ring-white/25 ${s.box} ${className}`}
     >
       {/* A single diagonal sheen keeps the badge from reading as flat fill. */}
       <span
         className={`pointer-events-none absolute inset-0 bg-[linear-gradient(150deg,rgba(255,255,255,0.28)_0%,rgba(255,255,255,0)_52%)] ${s.sheen}`}
       />
       <span className={`relative font-extrabold leading-none tracking-tight text-white ${s.type}`}>
-        B
+        🐔
       </span>
     </span>
   );

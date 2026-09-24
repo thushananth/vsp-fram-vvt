@@ -8,7 +8,7 @@ export function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** Update any product's stock, price and expiry — bakery and barcoded goods alike. */
+/** Update any product's stock, price and expiry — farm and barcoded goods alike. */
 export async function updateGoodsStock(params: {
   product: Product;
   qty: number;

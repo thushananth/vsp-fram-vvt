@@ -41,7 +41,7 @@ export function stockRowsToCsv(rows: StockReportRow[]): string {
     [
       r.name,
       r.category,
-      r.isBakery ? "Bakery" : "Barcoded good",
+      r.isBakery ? "Farm Products" : "Barcoded good",
       r.unit,
       r.price.toFixed(2),
       r.costPrice.toFixed(2),

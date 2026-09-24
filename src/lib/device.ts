@@ -8,7 +8,7 @@
  * Devices screen spot that it is the same machine.
  */
 
-const DEVICE_ID_KEY = "bakeshop.deviceId";
+const DEVICE_ID_KEY = "chickenfarm.deviceId";
 
 export interface DeviceDetails {
   browser: string;

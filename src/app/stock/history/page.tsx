@@ -8,7 +8,7 @@ import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/firestore/permissions";
 import { money, dateAndTime } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
-import { todayKey } from "@/lib/firestore/bakeryDays";
+import { todayKey } from "@/lib/firestore/farmDays";
 import Splash from "@/components/Splash";
 
 const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { PackageX, Plus, Trash2 } from "lucide-react";
 import { useReturns, logReturn, deleteReturn } from "@/lib/firestore/returns";
-import { todayKey } from "@/lib/firestore/bakeryDays";
+import { todayKey } from "@/lib/firestore/farmDays";
 import { useProducts } from "@/lib/firestore/products";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/firestore/permissions";
@@ -301,7 +301,7 @@ function LogReturnSheet({
       <ProductPicker
         products={products}
         suggestedIds={suggestedIds}
-        suggestedLabel="Bakery items"
+        suggestedLabel="Farm Products"
         title="What came back?"
         onPick={setProduct}
         onClose={onClose}

@@ -14,7 +14,7 @@ import { db } from "@/lib/firebase";
  * human-readable on the receipt, unlike a device-prefixed id.
  */
 
-const LEASE_KEY = "bakeshop.billLease";
+const LEASE_KEY = "chickenfarm.billLease";
 /** Numbers reserved per top-up — roughly two busy days of offline billing. */
 const LEASE_SIZE = 500;
 /** Top up whenever the block gets this thin and we happen to be online. */

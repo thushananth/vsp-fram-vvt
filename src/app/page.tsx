@@ -14,7 +14,7 @@ import { printReceipt } from "@/lib/printer";
 import { money } from "@/lib/format";
 import type { BillLine, Customer, PaymentType, Product } from "@/lib/types";
 
-const CATEGORIES = ["All", "Bakery", "Drinks", "Grocery"];
+const CATEGORIES = ["All", "Whole Chicken", "Chicken Parts", "Eggs", "Feed"];
 
 /** How long a bill may stay unacknowledged before the till calls it queued. */
 const SYNC_GRACE_MS = 2500;
@@ -255,7 +255,7 @@ export default function BillingPage() {
       if (!settings.printBills) return;
 
       const receiptLines = [
-        "Bakery POS",
+        "Chicken Farm POS",
         `Bill #${result.no}`,
         ...(soldTo ? [`Customer: ${soldTo.name}`] : []),
         "--------------------------------",

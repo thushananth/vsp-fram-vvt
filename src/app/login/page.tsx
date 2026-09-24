@@ -64,7 +64,7 @@ export default function LoginPage() {
 
       <div className="relative mb-8 flex flex-col items-center">
         <BrandMark size="md" />
-        <h1 className="mt-4 text-xl font-extrabold tracking-tight">Bakery POS</h1>
+        <h1 className="mt-4 text-xl font-extrabold tracking-tight">Chicken Farm POS</h1>
         <p className="mt-1 text-sm font-medium text-white/45">Sign in to open the shop</p>
       </div>
 
@@ -82,7 +82,7 @@ export default function LoginPage() {
             autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@bakeshop.com"
+            placeholder="you@chickenfarm.com"
             className="rounded-xl border border-border bg-ground px-4 py-3 text-base font-normal outline-none transition-colors focus:border-accent focus:bg-surface focus:ring-4 focus:ring-accent/10"
           />
           {/* Suggestions come from emails used to sign in on this device

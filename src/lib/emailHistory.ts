@@ -3,7 +3,7 @@
 // Locally-remembered emails for the login dropdown. Deliberately NOT backed
 // by Firebase — client code can't list Auth users, and this is just a
 // convenience for whoever has signed in on this device before.
-const STORAGE_KEY = "bakeshop.knownEmails";
+const STORAGE_KEY = "chickenfarm.knownEmails";
 const MAX_REMEMBERED = 8;
 
 export function getKnownEmails(): string[] {

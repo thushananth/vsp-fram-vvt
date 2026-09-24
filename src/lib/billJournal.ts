@@ -15,7 +15,7 @@ import type { BillLine, PaymentType } from "@/lib/types";
  * server acknowledges them, so in normal use the journal sits empty.
  */
 
-const JOURNAL_KEY = "bakeshop.billJournal";
+const JOURNAL_KEY = "chickenfarm.billJournal";
 const JOURNAL_EVENT = "bakeshop:billJournal";
 /** Bounded so a device stuck offline for weeks can't fill localStorage. */
 const MAX_ENTRIES = 1000;

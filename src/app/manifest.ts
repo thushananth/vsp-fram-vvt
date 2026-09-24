@@ -12,13 +12,13 @@ export const dynamic = "force-static";
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Bakery POS",
-    short_name: "Bakery POS",
-    description: "Shop POS for a bakery outlet — bills, stock and credit, online or off.",
+    name: "Chicken Farm POS",
+    short_name: "Farm POS",
+    description: "Farm POS for a chicken farm — bills, stock and credit, online or off.",
     start_url: "/",
     display: "standalone",
-    background_color: "#f6f8fb",
-    theme_color: "#2563eb",
+    background_color: "#fdf8ef",
+    theme_color: "#d97706",
     orientation: "any",
     icons: [
       {

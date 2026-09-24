@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useBills } from "@/lib/firestore/bills";
-import { todayKey } from "@/lib/firestore/bakeryDays";
+import { todayKey } from "@/lib/firestore/farmDays";
 import { useAuth } from "@/lib/auth";
 import Stat from "@/components/ui/Stat";
 import { money } from "@/lib/format";

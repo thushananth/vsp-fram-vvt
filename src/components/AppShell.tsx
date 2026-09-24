@@ -58,7 +58,7 @@ const FULL_NAV: NavItem[] = [
 // else (Dashboard, Users, sign out) lives in the sidebar/drawer.
 const CORE_HREFS = ["/", "/bills", "/stock", "/report"];
 
-const SIDEBAR_KEY = "bakeshop.sidebarCollapsed";
+const SIDEBAR_KEY = "chickenfarm.sidebarCollapsed";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -142,7 +142,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             >
               <Menu size={18} strokeWidth={2.2} />
             </button>
-            <span className="text-base font-extrabold tracking-tight">Bakery POS</span>
+            <span className="text-base font-extrabold tracking-tight">Chicken Farm POS</span>
           </div>
           <OnlinePill online={online} queued={queued} held={held} tone="dark" />
         </header>
@@ -268,10 +268,10 @@ function SidebarContent({
         {!collapsed && (
           <div className="min-w-0 flex-1">
             <p className="truncate text-[15px] font-extrabold leading-tight tracking-tight">
-              Bakery POS
+              Chicken Farm POS
             </p>
             <p className="truncate text-[10px] font-bold uppercase tracking-[0.16em] text-white/30">
-              5XCODES
+              VSP FARM
             </p>
           </div>
         )}
