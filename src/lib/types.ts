@@ -104,16 +104,6 @@ export interface CreditPayment {
   note: string | null;
 }
 
-export interface ReturnEntry {
-  id: string;
-  date: string;
-  productId: string;
-  qty: number;
-  reason: "Unsold" | "Damaged" | "Stale";
-  byUserId: string;
-  createdAt: number;
-}
-
 export type Role = "cashier" | "admin";
 
 export interface BakeryDayItem {

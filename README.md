@@ -103,7 +103,6 @@ Current flags (defaults in `DEFAULT_PERMISSIONS`):
 | `voidBills` | off | Void a bill from Bills (always on for admins) |
 | `editStockPrices` | on | Change price-each when adding stock |
 | `createStockItems` | off | Add a brand-new product from Stock → New item |
-| `logReturns` | on | Log a bakery return from Report or Stock |
 | `viewReports` | on | Open the Report screen — not yet wired into a route guard, see below |
 
 `viewReports` is defined but **not yet enforced** — Report currently has no

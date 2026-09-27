@@ -16,7 +16,7 @@ export interface CashierPermissions {
    *  separate from changing what the product costs in Stock. */
   editBillPrices: boolean;
   createStockItems: boolean;
-  logReturns: boolean;
+  addStock: boolean;
   viewReports: boolean;
   viewStockReport: boolean;
   reprintBills: boolean;
@@ -27,7 +27,7 @@ export const DEFAULT_PERMISSIONS: CashierPermissions = {
   editStockPrices: true,
   editBillPrices: true,
   createStockItems: false,
-  logReturns: true,
+  addStock: true,
   viewReports: true,
   viewStockReport: false,
   reprintBills: true,

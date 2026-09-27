@@ -69,15 +69,9 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
-    match /returns/{id} {
-      allow read: if isSignedIn();
-      allow create, delete: if isAdmin() || cashierCan('logReturns');
-      allow update: if isAdmin();
-    }
-
     // A log of stock purchases only, written whenever someone adds stock
-    // (Stock → + Stock / edit sheet). Append-only, like returns — nobody
-    // edits a purchase entry after the fact.
+    // (Stock → + Stock / edit sheet). Append-only — nobody edits a purchase
+    // entry after the fact.
     match /stockHistory/{id} {
       allow read: if isSignedIn();
       // Same bar as writing the product itself (see /products above) — this

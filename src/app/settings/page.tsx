@@ -50,9 +50,9 @@ const TOGGLES: { key: keyof CashierPermissions; label: string; body: string }[] 
     body: "Let cashiers add brand-new farm products / barcoded goods from Stock → New item.",
   },
   {
-    key: "logReturns",
-    label: "Log returns",
-    body: "Let cashiers log a farm return from Report or Stock.",
+    key: "addStock",
+    label: "Add stock quantity",
+    body: "Let cashiers add incoming stock quantities to existing items.",
   },
   {
     key: "viewReports",

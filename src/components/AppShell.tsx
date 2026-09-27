@@ -23,7 +23,6 @@ import {
   WifiOff,
   X,
   type LucideIcon,
-  PackageX,
   TrendingUp,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
@@ -44,7 +43,6 @@ const FULL_NAV: NavItem[] = [
   { href: "/bills", label: "Bills", icon: ClipboardList },
   { href: "/report", label: "Report", icon: BarChart3 },
   { href: "/stock", label: "Stock", icon: Package },
-  { href: "/returns", label: "Returns", icon: PackageX },
   { href: "/profit", label: "Profit", icon: TrendingUp, adminOnly: true },
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/credit", label: "Credit", icon: HandCoins },

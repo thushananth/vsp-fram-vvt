@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
 import { useBills } from "@/lib/firestore/bills";
 import { todayKey } from "@/lib/firestore/farmDays";
 import { useAuth } from "@/lib/auth";
@@ -129,13 +128,6 @@ export default function ReportPage() {
           <h1 className="text-2xl font-extrabold tracking-tight">Sales report</h1>
           <p className="text-sm font-medium text-muted">{range.label}</p>
         </div>
-        {/* Returns have their own screen now — this is just the way through. */}
-        <Link
-          href="/returns"
-          className="min-h-[46px] shrink-0 rounded-xl border border-warning/30 bg-warning/10 px-4 text-sm font-bold leading-[46px] text-warning"
-        >
-          Returns →
-        </Link>
       </div>
 
       <div className="mt-3 flex flex-wrap gap-1.5 rounded-xl bg-[#e9edf4] p-1">

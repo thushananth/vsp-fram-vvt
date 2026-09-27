@@ -9,14 +9,13 @@ import {
   setProductImage,
   PRODUCT_UNITS,
 } from "@/lib/firestore/products";
-import { todayKey, updateGoodsStock } from "@/lib/firestore/farmDays";
-import { logReturn } from "@/lib/firestore/returns";
+import { updateGoodsStock } from "@/lib/firestore/farmDays";
 import { logStockPurchase } from "@/lib/firestore/stockHistory";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/firestore/permissions";
 import { money } from "@/lib/format";
 import { PRODUCT_CATEGORIES } from "@/lib/constants";
-import type { Product, ReturnEntry } from "@/lib/types";
+import type { Product } from "@/lib/types";
 import ProductThumb from "@/components/ui/ProductThumb";
 import ProductImageField from "@/components/ProductImageField";
 import { deleteProductImage, uploadProductImage } from "@/lib/productImages";
@@ -24,22 +23,20 @@ import { deleteProductImage, uploadProductImage } from "@/lib/productImages";
 type Tab = "Farm Products" | "Barcoded goods";
 
 export default function StockPage() {
-  const today = todayKey();
   const { products, loading } = useProducts();
   const { profile } = useAuth();
   const { permissions } = usePermissions();
   const [tab, setTab] = useState<Tab>("Farm Products");
   const [editing, setEditing] = useState<Product | null>(null);
   const [adding, setAdding] = useState<Product | null>(null);
-  const [returning, setReturning] = useState<Product | null>(null);
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState("");
 
   const isAdmin = profile?.role === "admin";
   const canCreateItems = isAdmin || permissions.createStockItems;
   const canEditPrices = isAdmin || permissions.editStockPrices;
-  const canLogReturns = isAdmin || permissions.logReturns;
   const canViewStockReport = isAdmin || permissions.viewStockReport;
+  const canAddStock = isAdmin || permissions.addStock;
 
   const q = search.trim().toLowerCase();
 
@@ -186,18 +183,12 @@ export default function StockPage() {
                     </span>
                   </div>
                 </button>
-                <button
-                  onClick={() => setAdding(row.product)}
-                  className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-2 text-[11px] font-bold text-accent"
-                >
-                  + Stock
-                </button>
-                {tab === "Farm Products" && canLogReturns && (
+                {canAddStock && (
                   <button
-                    onClick={() => setReturning(row.product)}
-                    className="shrink-0 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2 text-[11px] font-bold text-warning"
+                    onClick={() => setAdding(row.product)}
+                    className="shrink-0 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-2 text-[11px] font-bold text-accent"
                   >
-                    Return
+                    + Stock
                   </button>
                 )}
               </div>
@@ -219,22 +210,14 @@ export default function StockPage() {
         <StockEditSheet
           product={editing}
           canEditPrice={canEditPrices}
+          canAddStock={canAddStock}
           canSeeCost={isAdmin}
           onClose={() => setEditing(null)}
         />
       )}
 
-      {adding && (
+      {adding && canAddStock && (
         <AddStockSheet product={adding} onClose={() => setAdding(null)} />
-      )}
-
-      {returning && profile && (
-        <QuickReturnSheet
-          product={returning}
-          today={today}
-          byUserId={profile.uid}
-          onClose={() => setReturning(null)}
-        />
       )}
 
       {creating && (
@@ -491,88 +474,6 @@ function NewItemSheet({
   );
 }
 
-const RETURN_REASONS: ReturnEntry["reason"][] = ["Unsold", "Damaged", "Stale"];
-
-function QuickReturnSheet({
-  product,
-  today,
-  byUserId,
-  onClose,
-}: {
-  product: Product;
-  today: string;
-  byUserId: string;
-  onClose: () => void;
-}) {
-  const [qty, setQty] = useState(1);
-  const [reason, setReason] = useState<ReturnEntry["reason"]>("Unsold");
-  const [saving, setSaving] = useState(false);
-
-  async function handleSave() {
-    setSaving(true);
-    try {
-      await logReturn({ date: today, productId: product.id, name: product.name, qty, reason, byUserId });
-      onClose();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-30 flex items-end bg-ink/50">
-      <div className="mx-auto flex w-full max-w-lg flex-col gap-3 rounded-t-3xl bg-surface p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-xl font-extrabold">Return — {product.name}</h3>
-            <p className="text-sm font-medium text-muted">Logged against today&apos;s date</p>
-          </div>
-          <button onClick={onClose} className="min-h-[42px] rounded-lg border border-border px-3.5 text-sm font-bold text-muted">
-            Close
-          </button>
-        </div>
-
-        <div className="mt-1 flex items-center gap-2.5">
-          <button
-            onClick={() => setQty((q) => Math.max(1, q - 1))}
-            className="h-11 w-11 rounded-xl border border-border text-xl font-bold"
-          >
-            −
-          </button>
-          <span className="tabular-nums flex-1 text-center text-lg font-bold">{qty}</span>
-          <button
-            onClick={() => setQty((q) => q + 1)}
-            className="h-11 w-11 rounded-xl bg-accent text-xl font-bold text-white"
-          >
-            +
-          </button>
-        </div>
-
-        <div className="flex gap-2">
-          {RETURN_REASONS.map((r) => (
-            <button
-              key={r}
-              onClick={() => setReason(r)}
-              className={`flex-1 rounded-xl border py-2.5 text-sm font-bold ${
-                reason === r ? "border-warning bg-warning/10 text-warning" : "border-border text-muted"
-              }`}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
-
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="mt-2 min-h-[52px] rounded-2xl bg-warning text-base font-bold text-white disabled:opacity-50"
-        >
-          {saving ? "Saving…" : "Log return"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 /**
  * The fast path for "a delivery came in" — available quantity and how much
  * to add, nothing else. Price, cost, expiry and min/max stay whatever they
@@ -687,11 +588,13 @@ function AddStockSheet({ product, onClose }: { product: Product; onClose: () => 
 function StockEditSheet({
   product,
   canEditPrice,
+  canAddStock,
   canSeeCost,
   onClose,
 }: {
   product: Product;
   canEditPrice: boolean;
+  canAddStock: boolean;
   canSeeCost: boolean;
   onClose: () => void;
 }) {
@@ -743,9 +646,9 @@ function StockEditSheet({
       setPhotoBusy(false);
     }
   }
-  const newTotal = available + addAmount;
-  const intakeValue = addAmount * price;
-  const intakeCost = addAmount * costPrice;
+  const newTotal = available + (canAddStock ? addAmount : 0);
+  const intakeValue = (canAddStock ? addAmount : 0) * price;
+  const intakeCost = (canAddStock ? addAmount : 0) * costPrice;
   const margin = price - costPrice;
 
   async function handleSave() {
@@ -762,7 +665,7 @@ function StockEditSheet({
         minLevel: min,
         maxLevel: max,
       });
-      if (addAmount > 0) {
+      if (canAddStock && addAmount > 0) {
         await logStockPurchase({
           productId: product.id,
           name: product.name,
@@ -807,45 +710,57 @@ function StockEditSheet({
           <span className="tabular-nums text-lg font-extrabold">{available}</span>
         </div>
 
-        <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">
-          Add stock
-        </div>
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => setAddAmount((q) => Math.max(0, q - 1))}
-            className="h-[54px] w-[54px] rounded-2xl border border-border text-2xl font-bold"
-          >
-            −
-          </button>
-          <input
-            value={addAmount}
-            onChange={(e) => setAddAmount(Math.max(0, Number(e.target.value) || 0))}
-            inputMode="numeric"
-            className="tabular-nums h-[54px] flex-1 rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground text-center text-2xl font-extrabold text-ink"
-          />
-          <button
-            onClick={() => setAddAmount((q) => q + 1)}
-            className="h-[54px] w-[54px] rounded-2xl bg-accent text-2xl font-bold text-white"
-          >
-            +
-          </button>
-        </div>
-        <div className="mt-2 flex gap-2">
-          {chips.map((c) => (
-            <button
-              key={c}
-              onClick={() => setAddAmount((q) => q + c)}
-              className="tabular-nums flex-1 min-h-[42px] rounded-xl border border-border text-sm font-bold text-muted"
-            >
-              +{c}
-            </button>
-          ))}
-        </div>
+        {canAddStock ? (
+          <>
+            <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">
+              Add stock
+            </div>
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setAddAmount((q) => Math.max(0, q - 1))}
+                className="h-[54px] w-[54px] rounded-2xl border border-border text-2xl font-bold"
+              >
+                −
+              </button>
+              <input
+                value={addAmount}
+                onChange={(e) => setAddAmount(Math.max(0, Number(e.target.value) || 0))}
+                inputMode="numeric"
+                className="tabular-nums h-[54px] flex-1 rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground text-center text-2xl font-extrabold text-ink"
+              />
+              <button
+                type="button"
+                onClick={() => setAddAmount((q) => q + 1)}
+                className="h-[54px] w-[54px] rounded-2xl bg-accent text-2xl font-bold text-white"
+              >
+                +
+              </button>
+            </div>
+            <div className="mt-2 flex gap-2">
+              {chips.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setAddAmount((q) => q + c)}
+                  className="tabular-nums flex-1 min-h-[42px] rounded-xl border border-border text-sm font-bold text-muted"
+                >
+                  +{c}
+                </button>
+              ))}
+            </div>
 
-        <div className="mt-3 flex items-center justify-between rounded-xl bg-accent/5 px-3.5 py-3">
-          <span className="text-sm font-semibold text-accent">New total</span>
-          <span className="tabular-nums text-lg font-extrabold text-accent">{newTotal}</span>
-        </div>
+            <div className="mt-3 flex items-center justify-between rounded-xl bg-accent/5 px-3.5 py-3">
+              <span className="text-sm font-semibold text-accent">New total</span>
+              <span className="tabular-nums text-lg font-extrabold text-accent">{newTotal}</span>
+            </div>
+          </>
+        ) : (
+          <div className="mt-4 flex items-center justify-between rounded-xl bg-ground px-3.5 py-3">
+            <span className="text-sm font-semibold text-muted">Add stock</span>
+            <span className="text-xs font-medium text-muted-2">Admin / Permission required</span>
+          </div>
+        )}
 
         <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">Price each</div>
         {canEditPrice ? (
