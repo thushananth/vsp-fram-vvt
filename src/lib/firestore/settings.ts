@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "@/lib/firebase";
 
 /**
  * Store-wide settings, admin-editable from Settings. Unlike CashierPermissions
@@ -30,14 +31,31 @@ export function useStoreSettings(): { settings: StoreSettings; loading: boolean 
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    return onSnapshot(
-      doc(db, STORE_DOC),
-      (snap) => {
-        setSettings({ ...DEFAULT_STORE_SETTINGS, ...(snap.data() as Partial<StoreSettings> | undefined) });
+    let unsubSnapshot: (() => void) | null = null;
+    const unsubAuth = onAuthStateChanged(auth, (u) => {
+      if (!u) {
+        setSettings(DEFAULT_STORE_SETTINGS);
         setLoading(false);
-      },
-      () => setLoading(false),
-    );
+        if (unsubSnapshot) {
+          unsubSnapshot();
+          unsubSnapshot = null;
+        }
+        return;
+      }
+      unsubSnapshot = onSnapshot(
+        doc(db, STORE_DOC),
+        (snap) => {
+          setSettings({ ...DEFAULT_STORE_SETTINGS, ...(snap.data() as Partial<StoreSettings> | undefined) });
+          setLoading(false);
+        },
+        () => setLoading(false),
+      );
+    });
+
+    return () => {
+      unsubAuth();
+      if (unsubSnapshot) unsubSnapshot();
+    };
   }, []);
 
   return { settings, loading };

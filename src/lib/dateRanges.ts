@@ -8,8 +8,10 @@ export interface DateRange {
   singleDayKey: string | null;
 }
 
+import { localDateKey } from "@/lib/format";
+
 function dayKey(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return localDateKey(d.getTime());
 }
 
 function startOfDay(d: Date): Date {
@@ -58,8 +60,12 @@ export function resolveRange(
   }
 
   // custom
-  const from = custom.from ? startOfDay(new Date(custom.from)) : startOfDay(now);
-  const to = custom.to ? startOfDay(new Date(custom.to)) : from;
+  // "T00:00:00" makes the date-input value parse as local midnight; a bare
+  // "yyyy-mm-dd" parses as UTC, a day early anywhere west of Greenwich.
+  const from = custom.from ? startOfDay(new Date(`${custom.from}T00:00:00`)) : startOfDay(now);
+  let to = custom.to ? startOfDay(new Date(`${custom.to}T00:00:00`)) : from;
+  // A "to" before "from" would give an empty range with no hint why.
+  if (to.getTime() < from.getTime()) to = from;
   const end = addDays(to, 1);
   const singleDay = from.getTime() === to.getTime();
   return {

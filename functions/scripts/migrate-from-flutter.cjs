@@ -13,10 +13,14 @@ const { initializeApp, cert } = require("firebase-admin/app");
 const { getFirestore, Timestamp } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 
-const SERVICE_ACCOUNT_PATH = path.resolve(
-  __dirname,
-  "../../../bake-shop-9f4f0-firebase-adminsdk-fbsvc-f6754fdb01.json",
-);
+// Kept outside the repo — never commit a service-account key. Override with
+// GOOGLE_APPLICATION_CREDENTIALS if the key lives somewhere else.
+const SERVICE_ACCOUNT_PATH =
+  process.env.GOOGLE_APPLICATION_CREDENTIALS ??
+  path.join(
+    require("os").homedir(),
+    "Downloads/vsp-farm-web-firebase-adminsdk-fbsvc-723c4af41a.json",
+  );
 const TARGET_DATABASE_ID = "bake-shop-live-v2";
 const OLD_ROOT = ["bake_shop_live", "vvt_shop"]; // collection/doc path prefix in the old default database
 

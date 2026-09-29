@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAdminGate } from "@/components/AdminGate";
+import ChangePasswordCard from "@/components/ChangePasswordCard";
 import { usePermissions, savePermissions, type CashierPermissions } from "@/lib/firestore/permissions";
 import { useStoreSettings, saveStoreSettings, type StoreSettings } from "@/lib/firestore/settings";
 import { setDeviceStatus } from "@/lib/firestore/devices";
@@ -218,6 +219,11 @@ export default function SettingsPage() {
           </p>
         </div>
       )}
+
+      <h2 className="mb-2.5 mt-6 text-[11px] font-bold uppercase tracking-wider text-muted-2">
+        Account
+      </h2>
+      <ChangePasswordCard />
     </div>
   );
 }

@@ -12,9 +12,8 @@ import CustomerSheet from "@/components/CustomerSheet";
 import ProductThumb from "@/components/ui/ProductThumb";
 import { printReceipt } from "@/lib/printer";
 import { money } from "@/lib/format";
+import { PRODUCT_CATEGORIES } from "@/lib/constants";
 import type { BillLine, Customer, PaymentType, Product } from "@/lib/types";
-
-const CATEGORIES = ["All", "Whole Chicken", "Chicken Parts", "Eggs", "Feed"];
 
 /** How long a bill may stay unacknowledged before the till calls it queued. */
 const SYNC_GRACE_MS = 2500;
@@ -53,10 +52,26 @@ export default function BillingPage() {
   // A shop with 300 products can't be browsed as a grid — typing two or three
   // letters has to be the normal way in, with the category chips as a coarse
   // filter on top.
+  // Chips come from the same list Stock's "New item" form uses, plus any
+  // category actually on a product (migrated items keep their own), so every
+  // stocked item is reachable from a chip — not only from "All".
+  const categories = useMemo(() => {
+    const seen = new Set(PRODUCT_CATEGORIES.map((c) => c.toLowerCase()));
+    const extra: string[] = [];
+    for (const p of products) {
+      const c = p.category?.trim();
+      if (c && !seen.has(c.toLowerCase())) {
+        seen.add(c.toLowerCase());
+        extra.push(c);
+      }
+    }
+    return ["All", ...PRODUCT_CATEGORIES, ...extra.sort()];
+  }, [products]);
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return products.filter((p) => {
-      if (category !== "All" && p.category.toLowerCase() !== category.toLowerCase()) return false;
+      if (category !== "All" && (p.category ?? "").trim().toLowerCase() !== category.toLowerCase()) return false;
       if (!needle) return true;
       return (
         p.name.toLowerCase().includes(needle) || (p.barcode ?? "").toLowerCase().includes(needle)
@@ -347,7 +362,7 @@ export default function BillingPage() {
 
       <div className="flex items-center gap-2">
         <div className="flex flex-1 gap-2 overflow-x-auto">
-        {CATEGORIES.map((c) => (
+        {categories.map((c) => (
           <button
             key={c}
             onClick={() => setCategory(c)}
@@ -403,7 +418,7 @@ export default function BillingPage() {
                 </span>
 
                 <span className="block text-[11px] font-bold text-muted">
-                  Available: {p.onShelf}
+                  Available: {p.onShelf ?? 0}
                 </span>
               </span>
 
@@ -433,7 +448,7 @@ export default function BillingPage() {
                   </span>
 
                   <span className="text-[12px] font-medium text-muted">
-                    Available: {p.onShelf}
+                    Available: {p.onShelf ?? 0}
                   </span>
 
                   <span className="tabular-nums text-[13px] font-bold text-accent">

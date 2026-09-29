@@ -24,7 +24,7 @@
 const { initializeApp, applicationDefault } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 
-const PROJECT_ID = "bake-shop-9f4f0";
+const PROJECT_ID = "vsp-farm-web";
 const TARGET_DATABASE_ID = "bake-shop-uat-v2";
 
 // The Flutter data's walk-in placeholder customer — this app uses a null

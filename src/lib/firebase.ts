@@ -3,6 +3,7 @@
 import { type FirebaseApp, getApps, initializeApp } from "firebase/app";
 import {
   type Firestore,
+  getFirestore,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
@@ -26,7 +27,7 @@ const firebaseConfig = {
 // (default) database the old Flutter app used — customers and stock were
 // migrated across once (see functions/scripts/migrate-from-flutter.cjs).
 const FIRESTORE_DATABASE_ID =
-  process.env.NEXT_PUBLIC_FIRESTORE_DATABASE_ID ?? "vsp-farm-live-v1";
+  process.env.NEXT_PUBLIC_FIRESTORE_DATABASE_ID ?? "(default)";
 
 export const app: FirebaseApp = getApps().length
   ? getApps()[0]
@@ -36,12 +37,25 @@ export const app: FirebaseApp = getApps().length
 // time — enableIndexedDbPersistence() has to run before any other Firestore
 // call, which is impossible to guarantee once multiple components touch
 // `db`, so we configure it here instead of lazily.
-export const db: Firestore = initializeFirestore(app, {
-  localCache:
-    typeof window === "undefined"
-      ? memoryLocalCache()
-      : persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-}, FIRESTORE_DATABASE_ID);
+function initDb(): Firestore {
+  try {
+    return initializeFirestore(app, {
+      localCache:
+        typeof window === "undefined"
+          ? memoryLocalCache()
+          : persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    }, FIRESTORE_DATABASE_ID);
+  } catch {
+    // Hot reload re-runs this module against the app getApps() handed back,
+    // which already has Firestore — reuse that instance instead of crashing.
+    return getFirestore(app, FIRESTORE_DATABASE_ID);
+  }
+}
+
+// Kept on globalThis so a hot reload in `next dev` picks up the instance it
+// already made rather than asking Firestore for a second one.
+const globalForDb = globalThis as typeof globalThis & { __vspFirestore?: Firestore };
+export const db: Firestore = (globalForDb.__vspFirestore ??= initDb());
 
 export const auth: Auth = getAuth(app);
 export const functions: Functions = getFunctions(app);

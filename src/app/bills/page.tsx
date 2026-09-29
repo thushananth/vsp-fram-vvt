@@ -76,7 +76,9 @@ export default function BillsPage() {
     // yesterday is exactly the one a cashier hunting this filter needs to
     // find, not one the range picker should be able to hide.
     let rows = filter === "Queued" ? bills.filter((b) => !b.synced) : inRange;
-    if (filter === "Paid") rows = rows.filter((b) => b.status === "paid" && b.synced);
+    // status "paid" only means "not deleted" — a credit bill with money still
+    // owing is not paid, so it belongs under Credit alone until it is settled.
+    if (filter === "Paid") rows = rows.filter((b) => b.status === "paid" && b.synced && b.due <= 0);
     else if (filter === "Credit") rows = rows.filter((b) => b.paymentType === "credit");
 
     const needle = search.trim().toLowerCase();
@@ -389,13 +391,20 @@ export default function BillsPage() {
                             : "bg-warning/10 text-warning"
                     }`}
                   >
+                    {/* A credit bill stays a credit bill once it is paid off —
+                        the badge follows it through part-paid to settled
+                        rather than turning into a plain cash "Paid". */}
                     {b.status === "void"
                       ? "Deleted"
                       : b.due > 0
-                        ? "Credit"
-                        : b.synced
-                          ? "Paid"
-                          : "Queued"}
+                        ? b.paymentType === "credit" && b.paid > 0
+                          ? "Credit · part paid"
+                          : "Credit"
+                        : !b.synced
+                          ? "Queued"
+                          : b.paymentType === "credit"
+                            ? "Credit · settled"
+                            : "Paid"}
                   </span>
                 </div>
               </button>

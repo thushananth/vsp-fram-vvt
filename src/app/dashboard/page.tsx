@@ -6,11 +6,9 @@ import { useBills } from "@/lib/firestore/bills";
 import { useProducts } from "@/lib/firestore/products";
 import { useUsers } from "@/lib/firestore/users";
 import Stat from "@/components/ui/Stat";
-import { money, initials } from "@/lib/format";
+import { money, initials, localDateKey } from "@/lib/format";
 
-function dayKey(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
+const dayKey = localDateKey;
 
 export default function DashboardPage() {
   const gate = useAdminGate("The dashboard", "It covers the whole shop's takings and staff, so it stays with admins.");
@@ -18,7 +16,7 @@ export default function DashboardPage() {
   const { products } = useProducts();
   const { users, loading: usersLoading } = useUsers();
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateKey();
   const paidBills = useMemo(() => bills.filter((b) => b.status === "paid"), [bills]);
   const todaysBills = useMemo(() => paidBills.filter((b) => dayKey(b.createdAt) === today), [paidBills, today]);
 
@@ -27,7 +25,7 @@ export default function DashboardPage() {
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      days.push(d.toISOString().slice(0, 10));
+      days.push(localDateKey(d.getTime()));
     }
     return days;
   }, []);
@@ -41,7 +39,8 @@ export default function DashboardPage() {
     return totals.map((t) => ({
       ...t,
       pct: Math.round((t.total / max) * 100),
-      label: new Date(t.day).toLocaleDateString("en-LK", { weekday: "short" }).slice(0, 3),
+      // Parsed as local midnight — a bare "yyyy-mm-dd" would parse as UTC.
+      label: new Date(`${t.day}T00:00:00`).toLocaleDateString("en-LK", { weekday: "short" }).slice(0, 3),
     }));
   }, [paidBills, weekDays]);
 
@@ -61,7 +60,7 @@ export default function DashboardPage() {
     const totals = months.map((m) => ({
       ...m,
       total: paidBills
-        .filter((b) => new Date(b.createdAt).toISOString().slice(0, 7) === m.key)
+        .filter((b) => localDateKey(b.createdAt).slice(0, 7) === m.key)
         .reduce((s, b) => s + b.total, 0),
     }));
     const max = Math.max(1, ...totals.map((t) => t.total));

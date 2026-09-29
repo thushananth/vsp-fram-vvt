@@ -5,7 +5,9 @@ import { useBills } from "@/lib/firestore/bills";
 import { todayKey } from "@/lib/firestore/farmDays";
 import { useAuth } from "@/lib/auth";
 import Stat from "@/components/ui/Stat";
-import { money } from "@/lib/format";
+import ReportTabs from "@/components/ReportTabs";
+import { usePermissionGate } from "@/components/AdminGate";
+import { localDateKey, money } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
 
 interface StockSaleRow {
@@ -25,6 +27,7 @@ const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [
 ];
 
 export default function ReportPage() {
+  const gate = usePermissionGate("viewReports", "Reports", "An admin can turn on “View day reports” for cashiers in Settings.");
   const today = todayKey();
   const { bills, loading: billsLoading } = useBills();
   const { profile } = useAuth();
@@ -86,14 +89,14 @@ export default function ReportPage() {
     }
     const byDay = new Map<string, number>();
     for (const b of paidBills) {
-      const key = new Date(b.createdAt).toISOString().slice(0, 10);
+      const key = localDateKey(b.createdAt);
       byDay.set(key, (byDay.get(key) ?? 0) + b.total);
     }
     const days = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b));
     const max = Math.max(1, ...days.map(([, total]) => total));
     return days.map(([key, total]) => ({
       key,
-      label: new Date(key).getDate().toString(),
+      label: String(Number(key.slice(8, 10))),
       total,
       pct: Math.round((total / max) * 100),
     }));
@@ -121,8 +124,11 @@ export default function ReportPage() {
 
   const loading = billsLoading;
 
+  if (gate) return gate;
+
   return (
     <div className="mx-auto max-w-3xl p-4 pb-8">
+      <ReportTabs />
       <div className="flex items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-extrabold tracking-tight">Sales report</h1>

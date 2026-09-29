@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { addDoc, collection, onSnapshot, orderBy, query } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "@/lib/firebase";
 
 /**
  * A log of stock going ON the shelf — purchases/intake only. It does not
@@ -26,29 +27,46 @@ export function useStockHistory(): { history: StockHistoryEntry[]; loading: bool
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, "stockHistory"), orderBy("createdAt", "desc"));
-    return onSnapshot(
-      q,
-      (snap) => {
-        setHistory(
-          snap.docs.map((d) => {
-            const data = d.data();
-            return {
-              id: d.id,
-              productId: data.productId ?? "",
-              name: data.name ?? "",
-              qty: data.qty ?? 0,
-              price: data.price ?? 0,
-              costPrice: data.costPrice ?? 0,
-              byUserId: data.byUserId ?? "",
-              createdAt: data.createdAt ?? 0,
-            } satisfies StockHistoryEntry;
-          }),
-        );
+    let unsubSnapshot: (() => void) | null = null;
+    const unsubAuth = onAuthStateChanged(auth, (u) => {
+      if (!u) {
+        setHistory([]);
         setLoading(false);
-      },
-      () => setLoading(false),
-    );
+        if (unsubSnapshot) {
+          unsubSnapshot();
+          unsubSnapshot = null;
+        }
+        return;
+      }
+      const q = query(collection(db, "stockHistory"), orderBy("createdAt", "desc"));
+      unsubSnapshot = onSnapshot(
+        q,
+        (snap) => {
+          setHistory(
+            snap.docs.map((d) => {
+              const data = d.data();
+              return {
+                id: d.id,
+                productId: data.productId ?? "",
+                name: data.name ?? "",
+                qty: data.qty ?? 0,
+                price: data.price ?? 0,
+                costPrice: data.costPrice ?? 0,
+                byUserId: data.byUserId ?? "",
+                createdAt: data.createdAt ?? 0,
+              } satisfies StockHistoryEntry;
+            }),
+          );
+          setLoading(false);
+        },
+        () => setLoading(false),
+      );
+    });
+
+    return () => {
+      unsubAuth();
+      if (unsubSnapshot) unsubSnapshot();
+    };
   }, []);
 
   return { history, loading };

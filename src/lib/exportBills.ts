@@ -2,6 +2,7 @@
 
 import type { JournalEntry } from "@/lib/billJournal";
 import type { Bill } from "@/lib/types";
+import { localDateKey } from "@/lib/format";
 
 /**
  * Getting bills off the till without a server. Everything here works from data
@@ -96,7 +97,7 @@ export function billsToCsv(bills: ExportableBill[]): string {
     const at = new Date(b.createdAt);
     return [
       b.no,
-      Number.isFinite(b.createdAt) && b.createdAt > 0 ? at.toISOString().slice(0, 10) : "",
+      Number.isFinite(b.createdAt) && b.createdAt > 0 ? localDateKey(b.createdAt) : "",
       Number.isFinite(b.createdAt) && b.createdAt > 0 ? at.toTimeString().slice(0, 8) : "",
       b.status,
       b.sync,

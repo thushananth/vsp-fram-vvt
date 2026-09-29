@@ -81,6 +81,12 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/** Bills store a Firestore Timestamp; tolerate a plain number too. */
+function millis(value: unknown): number {
+  if (typeof value === "number") return value;
+  return (value as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+}
+
 /**
  * Take a payment off a customer's balance, oldest bill first, opening balance
  * last. One transaction: the bills, the customer's cached balance and the
@@ -236,19 +242,27 @@ async function readReversal(tx: Transaction, payment: CreditPayment) {
   const reversedBills = billAllocations.map((a, i) => {
     const snap = billSnaps[i];
     const data = snap.exists() ? snap.data() : null;
+    // A bill deleted — or voided — since the payment can't be given money
+    // back: a void bill owes nothing by definition. Its allocation is dropped
+    // from the reversed total rather than re-opening debt on it.
+    const live = !!data && data.status !== "void";
     return {
       id: a.billId as string,
-      exists: snap.exists(),
-      // A bill deleted since the payment can't be given money back — its
-      // allocation is simply dropped from the reversed total.
-      due: round2((data?.due as number) ?? 0) + (data ? a.amount : 0),
-      paid: round2((data?.paid as number) ?? 0) - (data ? a.amount : 0),
+      exists: live,
+      amount: live ? a.amount : 0,
+      no: (data?.no as number) ?? 0,
+      createdAt: millis(data?.createdAt),
+      due: round2(((data?.due as number) ?? 0) + (live ? a.amount : 0)),
+      paid: round2(((data?.paid as number) ?? 0) - (live ? a.amount : 0)),
     };
   });
 
   const openingPaid = payment.allocations.find((a) => !a.billId)?.amount ?? 0;
   const reversedOpeningBalance = round2(((customer.openingBalance as number) ?? 0) + openingPaid);
-  const reversedRemainingCredit = round2(((customer.remainingCredit as number) ?? 0) + payment.amount);
+  // Only what actually goes back onto a live bill or the opening balance
+  // returns to the balance — not the payment's full face value.
+  const givenBack = round2(reversedBills.reduce((sum, b) => sum + b.amount, 0) + openingPaid);
+  const reversedRemainingCredit = round2(((customer.remainingCredit as number) ?? 0) + givenBack);
 
   return { customerRef, customer, reversedBills, reversedOpeningBalance, reversedRemainingCredit };
 }
@@ -322,9 +336,11 @@ export async function editCreditPayment(paymentId: string, params: { amount: num
           .filter((b): b is NonNullable<typeof b> => b !== null);
 
         const allOutstanding = [
+          // Real number and date, so the fresh allocation is oldest-first
+          // across these and the other bills alike.
           ...reversedBills.filter((b) => b.exists).map((b) => {
             const orig = payment.allocations.find((a) => a.billId === b.id)!;
-            return { id: b.id, due: b.due, paid: b.paid, no: 0, createdAt: 0, __origAmount: orig.amount };
+            return { id: b.id, due: b.due, paid: b.paid, no: b.no, createdAt: b.createdAt, __origAmount: orig.amount };
           }),
           ...otherBills.map((b) => ({ ...b, __origAmount: 0 })),
         ];

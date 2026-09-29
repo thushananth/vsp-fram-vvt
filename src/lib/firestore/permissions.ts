@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
+import { auth, db } from "@/lib/firebase";
 
 /**
  * Toggleable cashier permissions, admin-editable from Settings. Admins can
@@ -40,14 +41,31 @@ export function usePermissions(): { permissions: CashierPermissions; loading: bo
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    return onSnapshot(
-      doc(db, PERMISSIONS_DOC),
-      (snap) => {
-        setPermissions({ ...DEFAULT_PERMISSIONS, ...(snap.data() as Partial<CashierPermissions> | undefined) });
+    let unsubSnapshot: (() => void) | null = null;
+    const unsubAuth = onAuthStateChanged(auth, (u) => {
+      if (!u) {
+        setPermissions(DEFAULT_PERMISSIONS);
         setLoading(false);
-      },
-      () => setLoading(false),
-    );
+        if (unsubSnapshot) {
+          unsubSnapshot();
+          unsubSnapshot = null;
+        }
+        return;
+      }
+      unsubSnapshot = onSnapshot(
+        doc(db, PERMISSIONS_DOC),
+        (snap) => {
+          setPermissions({ ...DEFAULT_PERMISSIONS, ...(snap.data() as Partial<CashierPermissions> | undefined) });
+          setLoading(false);
+        },
+        () => setLoading(false),
+      );
+    });
+
+    return () => {
+      unsubAuth();
+      if (unsubSnapshot) unsubSnapshot();
+    };
   }, []);
 
   return { permissions, loading };
