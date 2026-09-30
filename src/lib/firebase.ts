@@ -40,6 +40,13 @@ export const app: FirebaseApp = getApps().length
 function initDb(): Firestore {
   try {
     return initializeFirestore(app, {
+      // Long polling instead of one long-lived streaming response. On shop
+      // wifi / mobile data that drops HTTP/3 (QUIC) packets the stream kept
+      // dying ("WebChannelConnection RPC 'Listen' stream transport errored",
+      // ERR_QUIC_PROTOCOL_ERROR) and reconnecting in a loop. Auto-detect only
+      // checks at connect time, so it never caught streams that die later.
+      // Real-time updates and offline persistence work the same either way.
+      experimentalForceLongPolling: true,
       localCache:
         typeof window === "undefined"
           ? memoryLocalCache()
