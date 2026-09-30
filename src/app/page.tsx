@@ -23,6 +23,14 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Quantities to the gram. Weighed goods sell as 2.5 or 0.266, and plain float
+ * arithmetic turns 2.266 - 1 into 1.2659999999999998 on the bill.
+ */
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
 export default function BillingPage() {
   const { products, loading } = useProducts();
   const { profile, user } = useAuth();
@@ -84,7 +92,7 @@ export default function BillingPage() {
   /** What would still be owed if the bill were charged at this tender. */
   const shortfall = tender !== null ? Math.max(0, round2(total - tender)) : total;
   const line = cart.find((l) => l.productId === editingLine) ?? null;
-  const cartCount = cart.reduce((sum, l) => sum + l.qty, 0);
+  const cartCount = round3(cart.reduce((sum, l) => sum + l.qty, 0));
 
   /**
    * Add one of a product to the bill. A product already on the bill keeps the
@@ -95,7 +103,7 @@ export default function BillingPage() {
     setCart((prev) => {
       const existing = prev.find((l) => l.productId === p.id);
       if (existing) {
-        return prev.map((l) => (l.productId === p.id ? { ...l, qty: l.qty + 1 } : l));
+        return prev.map((l) => (l.productId === p.id ? { ...l, qty: round3(l.qty + 1) } : l));
       }
       return [
         ...prev,
@@ -116,7 +124,8 @@ export default function BillingPage() {
     setEditingLine(p.id);
   }
 
-  function setQty(productId: string, qty: number) {
+  function setQty(productId: string, rawQty: number) {
+    const qty = round3(rawQty);
     setCart((prev) =>
       qty <= 0
         ? prev.filter((l) => l.productId !== productId)
@@ -536,7 +545,7 @@ export default function BillingPage() {
                     >
                       −
                     </button>
-                    <span className="w-6 text-center tabular-nums">{l.qty}</span>
+                    <span className="min-w-6 text-center tabular-nums">{l.qty}</span>
                     <button
                       onClick={() => setQty(l.productId, l.qty + 1)}
                       className="h-8 w-8 rounded-full border border-border text-lg font-bold"
@@ -742,10 +751,41 @@ function LineSheet({
   // Held as text so the field can be emptied mid-edit without snapping to 0.
   const [qty, setQty] = useState(String(line.qty));
   const [price, setPrice] = useState(String(line.price));
+  // "Rs 500 worth of chicken": a line total typed in sets the quantity from the
+  // price each. Empty means the quantity is being entered directly, as before.
+  const [amount, setAmount] = useState("");
+  const [editingTotal, setEditingTotal] = useState(false);
 
   const qtyValue = Math.max(0, Number(qty) || 0);
   const priceValue = Math.max(0, Number(price) || 0);
   const lineTotal = round2(qtyValue * priceValue);
+
+  /** Quantity for an amount at a price, to the gram (3 decimals). */
+  function qtyFor(amountText: string, priceEach: number): string {
+    const a = Math.max(0, Number(amountText) || 0);
+    if (a <= 0 || priceEach <= 0) return "";
+    return String(Math.round((a / priceEach) * 1000) / 1000);
+  }
+
+  function changeQty(next: string) {
+    setQty(next);
+    setAmount("");
+  }
+
+  function changeAmount(next: string) {
+    setAmount(next);
+    const computed = qtyFor(next, priceValue);
+    if (computed) setQty(computed);
+  }
+
+  function changePrice(next: string) {
+    setPrice(next);
+    // Keep the amount the customer asked for; the quantity follows the price.
+    if (amount) {
+      const computed = qtyFor(amount, Math.max(0, Number(next) || 0));
+      if (computed) setQty(computed);
+    }
+  }
 
   function apply() {
     if (qtyValue <= 0) {
@@ -753,7 +793,7 @@ function LineSheet({
       return;
     }
     onPrice(priceValue);
-    onQty(qtyValue);
+    onQty(round3(qtyValue));
     onClose();
   }
 
@@ -781,7 +821,7 @@ function LineSheet({
         </div>
         <div className="flex items-center gap-2.5">
           <button
-            onClick={() => setQty(String(Math.max(0, qtyValue - 1)))}
+            onClick={() => changeQty(String(Math.max(0, round3(qtyValue - 1))))}
             className="h-[54px] w-[54px] rounded-2xl border border-border text-2xl font-bold"
           >
             −
@@ -789,13 +829,14 @@ function LineSheet({
           <input
             autoFocus
             value={qty}
-            onChange={(e) => setQty(e.target.value)}
-            inputMode="numeric"
+            onChange={(e) => changeQty(e.target.value)}
+            // Decimal keypad: weighed goods sell as 2.5 kg.
+            inputMode="decimal"
             aria-label="Quantity"
             className="tabular-nums h-[54px] flex-1 rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground text-center text-2xl font-extrabold text-ink outline-none focus:border-accent"
           />
           <button
-            onClick={() => setQty(String(qtyValue + 1))}
+            onClick={() => changeQty(String(round3(qtyValue + 1)))}
             className="h-[54px] w-[54px] rounded-2xl bg-accent text-2xl font-bold text-white"
           >
             +
@@ -808,7 +849,7 @@ function LineSheet({
         {canEditPrice ? (
           <input
             value={price}
-            onChange={(e) => setPrice(e.target.value)}
+            onChange={(e) => changePrice(e.target.value)}
             inputMode="decimal"
             aria-label="Price each"
             className="tabular-nums h-[54px] w-full rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground px-4 text-right text-2xl font-extrabold text-ink outline-none focus:border-accent"
@@ -830,12 +871,30 @@ function LineSheet({
           </p>
         )}
 
-        <div className="mt-4 flex items-center justify-between rounded-xl bg-accent/5 px-3.5 py-3">
-          <span className="text-sm font-semibold text-accent">Line total</span>
-          <span className="tabular-nums text-lg font-extrabold text-accent">
-            {money(lineTotal)}
-          </span>
-        </div>
+        <label className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-accent/5 px-3.5 py-3">
+          <span className="shrink-0 text-sm font-semibold text-accent">Line total</span>
+          {/* Shows quantity × price; typing an amount here works the quantity
+              out from the price each instead. */}
+          <input
+            value={editingTotal || amount ? amount : String(lineTotal)}
+            onFocus={() => {
+              setEditingTotal(true);
+              if (!amount && lineTotal > 0) setAmount(String(lineTotal));
+            }}
+            onBlur={() => setEditingTotal(false)}
+            onChange={(e) => changeAmount(e.target.value)}
+            inputMode="decimal"
+            disabled={priceValue <= 0}
+            aria-label="Line total — type an amount to work out the quantity"
+            className="tabular-nums w-full min-w-0 rounded-lg border border-accent/30 bg-surface px-2.5 py-1.5 text-right text-lg font-extrabold text-accent outline-none focus:border-accent disabled:opacity-50"
+          />
+        </label>
+        {amount && qtyValue > 0 && (
+          <p className="tabular-nums mt-2 text-xs font-semibold text-muted">
+            {money(Number(amount) || 0)} ÷ {money(priceValue)} = quantity {qtyValue}
+            {money(lineTotal) !== money(Number(amount) || 0) && ` · charged ${money(lineTotal)}`}
+          </p>
+        )}
 
         <div className="mt-4 flex gap-2">
           <button

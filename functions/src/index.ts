@@ -34,16 +34,35 @@ export const createUser = onCall<CreateUserData>(async (request) => {
     throw new HttpsError("invalid-argument", "Password must be at least 6 characters");
   }
 
+  let uid: string;
   try {
     const userRecord = await getAuth().createUser({
       email,
       password,
       displayName: name,
     });
+    uid = userRecord.uid;
+  } catch (err) {
+    // Auth's own codes say exactly what was wrong with the input — pass them
+    // through instead of burying them under a generic "internal".
+    const code = (err as { code?: string }).code;
+    if (code === "auth/email-already-exists") {
+      throw new HttpsError("already-exists", "An account with this email already exists");
+    }
+    if (code === "auth/invalid-email") {
+      throw new HttpsError("invalid-argument", "That email address isn't valid");
+    }
+    if (code === "auth/invalid-password") {
+      throw new HttpsError("invalid-argument", "Password must be at least 6 characters");
+    }
+    const message = err instanceof Error ? err.message : "Unknown error";
+    throw new HttpsError("internal", `Failed to create user: ${message}`);
+  }
 
-    await getAuth().setCustomUserClaims(userRecord.uid, { role });
+  try {
+    await getAuth().setCustomUserClaims(uid, { role });
 
-    await db.doc(`users/${userRecord.uid}`).set({
+    await db.doc(`users/${uid}`).set({
       name,
       email,
       role,
@@ -52,8 +71,12 @@ export const createUser = onCall<CreateUserData>(async (request) => {
       createdBy: request.auth.uid,
     });
 
-    return { uid: userRecord.uid };
+    return { uid };
   } catch (err) {
+    // The login exists but its profile doesn't: remove the login so the admin
+    // can simply try again, rather than leaving an account that can't be
+    // used and blocks the email with "already exists".
+    await getAuth().deleteUser(uid).catch(() => undefined);
     const message = err instanceof Error ? err.message : "Unknown error";
     throw new HttpsError("internal", `Failed to create user: ${message}`);
   }
