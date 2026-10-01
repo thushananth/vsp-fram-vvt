@@ -3,7 +3,7 @@
 // WebUSB ESC/POS printing for Xprinter thermal printers.
 // Full reference: /docs/webusbXprinter.md
 
-export const XPRINTER_VENDOR_IDS = [0x0483, 0x1504, 0x04b8, 0x0dd4];
+export const XPRINTER_VENDOR_IDS = [0x1fc9, 0x0483, 0x1504, 0x04b8, 0x0dd4];
 
 export interface PrintReceiptOptions {
   lines: string[];
