@@ -7,10 +7,10 @@ import { usePermissions } from "@/lib/firestore/permissions";
 import { createBill, type CreatedBill } from "@/lib/firestore/bills";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import { useStoreSettings } from "@/lib/firestore/settings";
-import { LayoutGrid, List, Search, ShoppingBasket, X } from "lucide-react";
+import { LayoutGrid, List, Printer, Search, ShoppingBasket, X } from "lucide-react";
 import CustomerSheet from "@/components/CustomerSheet";
 import ProductThumb from "@/components/ui/ProductThumb";
-import { printReceipt } from "@/lib/printer";
+import { printReceipt, usePrinter } from "@/lib/printer";
 import { money } from "@/lib/format";
 import { PRODUCT_CATEGORIES } from "@/lib/constants";
 import type { BillLine, Customer, PaymentType, Product } from "@/lib/types";
@@ -36,6 +36,8 @@ export default function BillingPage() {
   const { profile, user } = useAuth();
   const { settings } = useStoreSettings();
   const { permissions } = usePermissions();
+  const printer = usePrinter();
+  const [printerBusy, setPrinterBusy] = useState(false);
   const [category, setCategory] = useState("All");
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<BillLine[]>([]);
@@ -345,8 +347,50 @@ export default function BillingPage() {
     );
   }
 
+  async function handlePrinterAction() {
+    setPrinterBusy(true);
+    const result =
+      printer.status === "connected" ? await printer.testPrint() : await printer.connect();
+    setPrinterBusy(false);
+    if (!result.success) {
+      setConfirmation(`Printer: ${result.error}`);
+    } else if (printer.status === "connected") {
+      setConfirmation("Test receipt sent to the printer");
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-3 p-3 pb-28">
+      <div className="flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-2 text-sm">
+        <Printer className="h-4 w-4 shrink-0 text-muted" />
+        <span
+          className={`h-2 w-2 shrink-0 rounded-full ${
+            printer.status === "connected" ? "bg-success" : printer.status === "checking" ? "bg-muted-2" : "bg-danger"
+          }`}
+        />
+        <span className="min-w-0 flex-1 truncate">
+          {printer.status === "connected"
+            ? `Printer connected · ${printer.name}`
+            : printer.status === "unsupported"
+              ? "Printing needs Chrome or Edge (WebUSB)"
+              : printer.status === "checking"
+                ? "Checking printer…"
+                : "Printer not connected"}
+          {!settings.printBills && <span className="text-muted"> · auto-print off</span>}
+        </span>
+        {(printer.status === "connected" || printer.status === "disconnected") && (
+          <button
+            onClick={handlePrinterAction}
+            disabled={printerBusy}
+            className={`shrink-0 rounded-lg px-3 py-1.5 font-semibold disabled:opacity-50 ${
+              printer.status === "connected" ? "border border-border text-muted" : "bg-accent text-white"
+            }`}
+          >
+            {printerBusy ? "…" : printer.status === "connected" ? "Test print" : "Connect"}
+          </button>
+        )}
+      </div>
+
       <form onSubmit={handleSearchSubmit} className="relative">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-muted-2" />
         <input

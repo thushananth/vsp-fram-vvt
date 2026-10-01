@@ -1,5 +1,7 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+
 // WebUSB ESC/POS printing for Xprinter thermal printers.
 // Full reference: /docs/webusbXprinter.md
 
@@ -118,4 +120,63 @@ export async function getAuthorizedPrinter(
   if (!("usb" in navigator)) return undefined;
   const devices = await navigator.usb.getDevices();
   return devices.find((d) => vendorIds.includes(d.vendorId));
+}
+
+export type PrinterStatus = "checking" | "unsupported" | "disconnected" | "connected";
+
+/**
+ * Live printer state for the till. WebUSB only reports devices this browser
+ * has already been allowed to use, so "disconnected" covers both "unplugged"
+ * and "never paired here" — connect() answers either by opening the picker.
+ */
+export function usePrinter(vendorIds: number[] = XPRINTER_VENDOR_IDS) {
+  const [status, setStatus] = useState<PrinterStatus>("checking");
+  const [name, setName] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    const supported = typeof navigator !== "undefined" && "usb" in navigator;
+    return (supported ? getAuthorizedPrinter(vendorIds) : Promise.resolve(undefined)).then(
+      (device) => {
+        setStatus(!supported ? "unsupported" : device ? "connected" : "disconnected");
+        setName(device ? device.productName || "USB printer" : null);
+      },
+      () => setStatus("disconnected"),
+    );
+  }, [vendorIds]);
+
+  useEffect(() => {
+    void refresh();
+    if (typeof navigator === "undefined" || !("usb" in navigator)) return;
+    const onChange = () => void refresh();
+    navigator.usb.addEventListener("connect", onChange);
+    navigator.usb.addEventListener("disconnect", onChange);
+    return () => {
+      navigator.usb.removeEventListener("connect", onChange);
+      navigator.usb.removeEventListener("disconnect", onChange);
+    };
+  }, [refresh]);
+
+  /** Show the browser's picker. Must run from a click — WebUSB demands a user gesture. */
+  const connect = useCallback(async (): Promise<PrintResult> => {
+    if (!("usb" in navigator)) {
+      return { success: false, error: "WebUSB not supported in this browser" };
+    }
+    try {
+      await navigator.usb.requestDevice({ filters: vendorIds.map((vendorId) => ({ vendorId })) });
+      await refresh();
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  }, [vendorIds, refresh]);
+
+  const testPrint = useCallback(
+    () =>
+      printReceipt({
+        lines: ["PRINTER TEST", "--------------------------------", new Date().toLocaleString(), "Printer is working."],
+      }),
+    [],
+  );
+
+  return { status, name, connect, testPrint, refresh };
 }
