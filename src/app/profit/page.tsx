@@ -7,9 +7,8 @@ import { useBills } from "@/lib/firestore/bills";
 import { useProducts } from "@/lib/firestore/products";
 import ProductThumb from "@/components/ui/ProductThumb";
 import Stat from "@/components/ui/Stat";
-import { money } from "@/lib/format";
+import { money, todayKey } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
-import { todayKey } from "@/lib/firestore/farmDays";
 import type { Product } from "@/lib/types";
 
 const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [

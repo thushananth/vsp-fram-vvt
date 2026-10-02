@@ -18,6 +18,7 @@ import {
   Receipt,
   Settings,
   ShieldCheck,
+  ShieldHalf,
   Users,
   Wifi,
   WifiOff,
@@ -42,19 +43,20 @@ const FULL_NAV: NavItem[] = [
   { href: "/", label: "Billing", icon: Receipt },
   { href: "/bills", label: "Bills", icon: ClipboardList },
   { href: "/report", label: "Report", icon: BarChart3 },
-  { href: "/stock", label: "Stock", icon: Package },
+  { href: "/products", label: "Products", icon: Package },
   { href: "/profit", label: "Profit", icon: TrendingUp, adminOnly: true },
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/credit", label: "Credit", icon: HandCoins },
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
   { href: "/users", label: "Users", icon: Users, adminOnly: true },
+  { href: "/permissions", label: "Permissions", icon: ShieldHalf, adminOnly: true },
   { href: "/devices", label: "Devices", icon: ShieldCheck, adminOnly: true },
   { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
 
 // The bottom bar only ever shows the everyday cashier flow — everything
 // else (Dashboard, Users, sign out) lives in the sidebar/drawer.
-const CORE_HREFS = ["/", "/bills", "/stock", "/report"];
+const CORE_HREFS = ["/", "/bills", "/products", "/report"];
 
 const SIDEBAR_KEY = "chickenfarm.sidebarCollapsed";
 
@@ -378,7 +380,7 @@ function NavGroup({
       )}
       <div className="flex flex-col gap-1">
         {items.map((item) => {
-          const active = pathname === item.href;
+          const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`));
           const Icon = item.icon;
           return (
             <Link

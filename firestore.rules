@@ -26,16 +26,22 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Stock (intake, price-each, expiry) is a cashier-facing screen in the
-    // design, not admin-only, so any signed-in user can write here.
-    match /products/{id} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+    // Products and their categories (Products screen). Admins always; a
+    // cashier only with the matching permission. Renaming a category rewrites
+    // its name onto its products, so that permission covers products too.
+    function canManageProducts() {
+      return isAdmin() || cashierCan('addProducts') || cashierCan('editProducts') ||
+        cashierCan('toggleProducts') || cashierCan('manageCategories');
     }
 
-    match /bakeryDays/{date}/items/{id} {
+    match /products/{id} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow write: if canManageProducts();
+    }
+
+    match /categories/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin() || cashierCan('manageCategories');
     }
 
     // Settling credit moves paid/due on a bill, which any signed-in user may
@@ -67,17 +73,6 @@ service cloud.firestore {
       allow create: if isSignedIn();
       // A correction, not a routine edit — same bar as voiding a bill.
       allow update, delete: if isAdmin();
-    }
-
-    // A log of stock purchases only, written whenever someone adds stock
-    // (Stock → + Stock / edit sheet). Append-only — nobody edits a purchase
-    // entry after the fact.
-    match /stockHistory/{id} {
-      allow read: if isSignedIn();
-      // Same bar as writing the product itself (see /products above) — this
-      // is just its paper trail.
-      allow create: if isSignedIn();
-      allow update, delete: if false;
     }
 
     match /counters/{id} {

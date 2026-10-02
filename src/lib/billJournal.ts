@@ -37,6 +37,8 @@ export interface JournalEntry {
   paymentType: PaymentType;
   customerId: string | null;
   customerName: string | null;
+  /** Walk-in round-off — see Bill.discount. */
+  discount?: number;
   state: "pending" | "failed";
   /** Why the server refused it. Only set once state is "failed". */
   error: string | null;

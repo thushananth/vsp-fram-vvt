@@ -3,17 +3,19 @@
 import { useMemo, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useProducts } from "@/lib/firestore/products";
-import { usePermissions } from "@/lib/firestore/permissions";
+import { useCan, usePermissions } from "@/lib/firestore/permissions";
 import { createBill, type CreatedBill } from "@/lib/firestore/bills";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import { useStoreSettings } from "@/lib/firestore/settings";
+import { useCategories } from "@/lib/firestore/categories";
 import { LayoutGrid, List, Printer, Search, ShoppingBasket, X } from "lucide-react";
 import CustomerSheet from "@/components/CustomerSheet";
 import ProductThumb from "@/components/ui/ProductThumb";
-import { printReceipt, usePrinter } from "@/lib/printer";
+import NumField from "@/components/ui/NumField";
+import { printTickets, usePrinter } from "@/lib/printer";
+import { billTickets, needsCounterCopy, testTicket } from "@/lib/receipts";
 import { money } from "@/lib/format";
-import { PRODUCT_CATEGORIES } from "@/lib/constants";
-import type { BillLine, Customer, PaymentType, Product } from "@/lib/types";
+import type { Bill, BillLine, Customer, PaymentType, Product } from "@/lib/types";
 
 /** How long a bill may stay unacknowledged before the till calls it queued. */
 const SYNC_GRACE_MS = 2500;
@@ -33,12 +35,16 @@ function round3(n: number): number {
 
 export default function BillingPage() {
   const { products, loading } = useProducts();
+  const { categories: allCategories } = useCategories();
   const { profile, user } = useAuth();
   const { settings } = useStoreSettings();
   const { permissions } = usePermissions();
   const printer = usePrinter();
   const [printerBusy, setPrinterBusy] = useState(false);
-  const [category, setCategory] = useState("All");
+  /** null = every category. */
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  /** This bill only: null follows the store setting, true/false overrides it. */
+  const [printThis, setPrintThis] = useState<boolean | null>(null);
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState<BillLine[]>([]);
   const [tender, setTender] = useState<number | null>(null);
@@ -61,39 +67,41 @@ export default function BillingPage() {
 
   // A shop with 300 products can't be browsed as a grid — typing two or three
   // letters has to be the normal way in, with the category chips as a coarse
-  // filter on top.
-  // Chips come from the same list Stock's "New item" form uses, plus any
-  // category actually on a product (migrated items keep their own), so every
-  // stocked item is reachable from a chip — not only from "All".
-  const categories = useMemo(() => {
-    const seen = new Set(PRODUCT_CATEGORIES.map((c) => c.toLowerCase()));
-    const extra: string[] = [];
-    for (const p of products) {
-      const c = p.category?.trim();
-      if (c && !seen.has(c.toLowerCase())) {
-        seen.add(c.toLowerCase());
-        extra.push(c);
-      }
-    }
-    return ["All", ...PRODUCT_CATEGORIES, ...extra.sort()];
-  }, [products]);
+  // filter on top. Chips come from Products → Categories, in their set order.
+  const categories = useMemo(() => allCategories.filter((c) => c.active), [allCategories]);
+  const colorOf = useMemo(
+    () => new Map(allCategories.map((c) => [c.id, c.color])),
+    [allCategories],
+  );
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return products.filter((p) => {
-      if (category !== "All" && (p.category ?? "").trim().toLowerCase() !== category.toLowerCase()) return false;
+      if (categoryId && p.categoryId !== categoryId) return false;
       if (!needle) return true;
       return (
         p.name.toLowerCase().includes(needle) || (p.barcode ?? "").toLowerCase().includes(needle)
       );
     });
-  }, [products, category, search]);
+  }, [products, categoryId, search]);
 
   const total = round2(cart.reduce((sum, l) => sum + l.price * l.qty, 0));
   const change = tender !== null ? Math.max(0, round2(tender - total)) : 0;
   /** What would still be owed if the bill were charged at this tender. */
   const shortfall = tender !== null ? Math.max(0, round2(total - tender)) : total;
   const line = cart.find((l) => l.productId === editingLine) ?? null;
+  /**
+   * A walk-in a little short (Rs 1000 for a 1010 bill) is still a sale: the
+   * difference comes off as round-off, up to the limit an admin sets.
+   */
+  const roundOff =
+    !customer && tender !== null && tender > 0 && shortfall > 0 && shortfall <= settings.walkInRoundOff
+      ? shortfall
+      : 0;
+  const printing = printThis ?? settings.printBills;
+  const unitOf = (productId: string) => products.find((p) => p.id === productId)?.unit ?? "";
+  const counterCopyDue =
+    settings.printCounterCopy && needsCounterCopy({ lines: cart }, products, allCategories);
   const cartCount = round3(cart.reduce((sum, l) => sum + l.qty, 0));
 
   /**
@@ -109,7 +117,14 @@ export default function BillingPage() {
       }
       return [
         ...prev,
-        { productId: p.id, name: p.name, qty: 1, price: p.price, costPrice: p.costPrice },
+        {
+          productId: p.id,
+          name: p.name,
+          categoryId: p.categoryId,
+          qty: 1,
+          price: p.price,
+          costPrice: p.costPrice,
+        },
       ];
     });
   }
@@ -151,6 +166,7 @@ export default function BillingPage() {
           return {
             productId: l.productId,
             name: l.name,
+            categoryId: l.categoryId,
             qty: l.qty,
             price,
             costPrice: l.costPrice,
@@ -207,8 +223,14 @@ export default function BillingPage() {
       return;
     }
     if (!customer) {
+      if (roundOff > 0) {
+        void completeSale({ paid: tender, tender, change: 0, paymentType: "cash", discount: roundOff });
+        return;
+      }
       setChargeError(
-        `Short by ${money(shortfall)}. A walk-in has to pay in full — take the rest, or pick a customer to put ${money(shortfall)} on credit.`,
+        settings.walkInRoundOff > 0
+          ? `Short by ${money(shortfall)} — a walk-in can be up to ${money(settings.walkInRoundOff)} short. Take the rest, or pick a customer to put it on credit.`
+          : `Short by ${money(shortfall)}. A walk-in has to pay in full — take the rest, or pick a customer to put ${money(shortfall)} on credit.`,
       );
       return;
     }
@@ -239,6 +261,8 @@ export default function BillingPage() {
     tender: number;
     change: number;
     paymentType: PaymentType;
+    /** Walk-in round-off, taken off the total. */
+    discount?: number;
   }) {
     const cashierId = profile?.uid ?? user?.uid;
     if (cart.length === 0 || !cashierId) return;
@@ -247,11 +271,16 @@ export default function BillingPage() {
     // Snapshot the cart and customer for the receipt — state is cleared on success.
     const soldLines = cart;
     const soldTo = customer;
-    const due = round2(total - payment.paid);
+    const discount = round2(payment.discount ?? 0);
+    const billTotal = round2(total - discount);
+    const due = round2(billTotal - payment.paid);
+    const shouldPrint = printing;
+    const withCounterCopy = counterCopyDue;
     try {
       const result = createBill({
         lines: soldLines,
-        total,
+        total: billTotal,
+        discount,
         paid: payment.paid,
         tender: payment.tender,
         change: payment.change,
@@ -278,31 +307,39 @@ export default function BillingPage() {
       setBasketOpen(false);
       setChargeError(null);
 
-      if (!settings.printBills) return;
+      setPrintThis(null);
 
-      const receiptLines = [
-        "Chicken Farm POS",
-        `Bill #${result.no}`,
-        ...(soldTo ? [`Customer: ${soldTo.name}`] : []),
-        "--------------------------------",
-        ...soldLines.map(
-          (l) =>
-            `${l.name}  ${l.qty} x ${l.price.toFixed(2)}  Rs ${(l.price * l.qty).toFixed(2)}`,
-        ),
-        "--------------------------------",
-        `Total: Rs ${total.toFixed(2)}`,
-        `Paid: Rs ${payment.paid.toFixed(2)}`,
-        ...(due > 0
-          ? [
-              "BALANCE ON CREDIT",
-              `Due: Rs ${due.toFixed(2)}`,
-              `Balance: Rs ${((soldTo?.remainingCredit ?? 0) + due).toFixed(2)}`,
-            ]
-          : [`Tender: Rs ${payment.tender.toFixed(2)}`, `Change: Rs ${payment.change.toFixed(2)}`]),
-      ];
+      if (!shouldPrint) return;
+
+      const sold: Bill = {
+        id: result.id,
+        no: result.no,
+        createdAt: Date.now(),
+        cashierId,
+        lines: soldLines,
+        total: billTotal,
+        tender: payment.tender,
+        change: payment.change,
+        status: "paid",
+        synced: false,
+        customerId: soldTo?.id ?? null,
+        customerName: soldTo?.name ?? null,
+        paymentType: payment.paymentType,
+        paid: payment.paid,
+        due,
+        discount,
+      };
       // Fire-and-forget: the WebUSB picker can block for as long as the
       // cashier takes to answer it, and Charge must stay usable meanwhile.
-      printReceipt({ lines: receiptLines, cuts: true })
+      printTickets(
+        billTickets(sold, {
+          paperWidth: settings.paperWidth,
+          unitOf,
+          cashierName: profile?.name,
+          previousBalance: soldTo ? soldTo.remainingCredit : undefined,
+          withCounterCopy,
+        }),
+      )
         .then((printed) => {
           if (!printed.success) {
             setConfirmation(`Bill #${result.no} saved — printing failed (${printed.error})`);
@@ -350,7 +387,9 @@ export default function BillingPage() {
   async function handlePrinterAction() {
     setPrinterBusy(true);
     const result =
-      printer.status === "connected" ? await printer.testPrint() : await printer.connect();
+      printer.status === "connected"
+        ? await printTickets([testTicket(settings.paperWidth)])
+        : await printer.connect();
     setPrinterBusy(false);
     if (!result.success) {
       setConfirmation(`Printer: ${result.error}`);
@@ -414,18 +453,31 @@ export default function BillingPage() {
       </form>
 
       <div className="flex items-center gap-2">
-        <div className="flex flex-1 gap-2 overflow-x-auto">
-        {categories.map((c) => (
+        <div className="flex flex-1 gap-2 overflow-x-auto pb-0.5">
           <button
-            key={c}
-            onClick={() => setCategory(c)}
+            onClick={() => setCategoryId(null)}
             className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
-              category === c ? "bg-accent text-white" : "bg-surface text-muted border border-border"
+              categoryId === null ? "bg-ink text-white" : "border border-border bg-surface text-muted"
             }`}
           >
-            {c}
+            All
           </button>
-        ))}
+          {categories.map((c) => {
+            const on = categoryId === c.id;
+            return (
+              <button
+                key={c.id}
+                onClick={() => setCategoryId(on ? null : c.id)}
+                style={on ? { backgroundColor: c.color, borderColor: c.color } : undefined}
+                className={`flex shrink-0 items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold ${
+                  on ? "text-white" : "border-border bg-surface text-ink"
+                }`}
+              >
+                {!on && <span className="h-2 w-2 rounded-full" style={{ backgroundColor: c.color }} />}
+                {c.name}
+              </button>
+            );
+          })}
         </div>
         {/* Photos help pick a bun by sight; a list fits far more of a
             three-hundred-item catalogue on a small screen. Both are useful, so
@@ -452,68 +504,49 @@ export default function BillingPage() {
         >
           {filtered.map((p) =>
             dense ? (
-             <button
-              key={p.id}
-              onClick={() => pickProduct(p)}
-              className="flex items-center gap-2.5 rounded-xl border border-border bg-surface px-2.5 py-2 text-left"
-            >
-              {/* Product image disabled
-              <ProductThumb name={p.name} imageUrl={p.imageUrl} size="sm" />
-              */}
-
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[15px] font-bold">
-                  {p.name}
+              <button
+                key={p.id}
+                onClick={() => pickProduct(p)}
+                className="flex items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2.5 text-left"
+              >
+                <span
+                  className="h-8 w-1.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: colorOf.get(p.categoryId) ?? "#94a3b8" }}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[15px] font-bold">{p.name}</span>
+                  <span className="block truncate text-[11px] font-medium text-muted-2">{p.category}</span>
                 </span>
-
-                <span className="block truncate text-[11px] font-medium text-muted-2">
-                  {p.category}
+                <span className="tabular-nums shrink-0 text-sm font-bold text-ink">
+                  {money(p.price)}
+                  <span className="text-[11px] font-semibold text-muted-2"> /{p.unit}</span>
                 </span>
-
-                <span className="block text-[11px] font-bold text-muted">
-                  Available: {p.onShelf ?? 0}
-                </span>
-              </span>
-
-              <span className="tabular-nums shrink-0 text-sm font-bold text-accent">
-                {money(p.price)}
-              </span>
-            </button>
+              </button>
             ) : (
               <button
                 key={p.id}
                 onClick={() => pickProduct(p)}
-                className="flex flex-col overflow-hidden rounded-xl border border-border bg-surface text-left"
+                className="relative flex min-h-[96px] flex-col justify-between gap-2 overflow-hidden rounded-2xl border border-border bg-surface p-3 pt-4 text-left transition-transform active:scale-[0.97]"
               >
-                {/* Product image disabled
-                <div className="aspect-square w-full overflow-hidden">
-                  <ProductThumb
-                    name={p.name}
-                    imageUrl={p.imageUrl}
-                    shape="rounded-none"
-                  />
-                </div>
-                */}
-
-                <div className="flex flex-1 flex-col justify-between gap-1 p-3">
-                  <span className="line-clamp-2 text-[13px] font-semibold leading-tight">
-                    {p.name}
-                  </span>
-
-                  <span className="text-[12px] font-medium text-muted">
-                    Available: {p.onShelf ?? 0}
-                  </span>
-
-                  <span className="tabular-nums text-[13px] font-bold text-accent">
-                    {money(p.price)}
-                  </span>
-                </div>
+                <span
+                  className="absolute inset-x-0 top-0 h-1"
+                  style={{ backgroundColor: colorOf.get(p.categoryId) ?? "#94a3b8" }}
+                />
+                <span className="line-clamp-2 text-[14px] font-bold leading-tight">{p.name}</span>
+                <span className="tabular-nums text-[14px] font-extrabold text-ink">
+                  {money(p.price)}
+                  <span className="text-[11px] font-semibold text-muted-2"> /{p.unit}</span>
+                </span>
               </button>
             ),
           )}
           {filtered.length === 0 && (
             <p className="col-span-full py-8 text-center text-muted">
-              {search ? `Nothing matches “${search.trim()}”.` : "No products in this category yet."}
+              {search
+                ? `Nothing matches “${search.trim()}”.`
+                : products.length === 0
+                  ? "No products yet — add them under Products."
+                  : "No products in this category yet."}
             </p>
           )}
         </div>
@@ -630,14 +663,12 @@ export default function BillingPage() {
                 paying 500 against an 800 bill has no chip to press. */}
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold uppercase tracking-wider text-muted-2">Paid</span>
-              <input
-                value={tender ?? ""}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
+              <NumField
+                value={tender === null ? "" : String(tender)}
+                onValue={(raw) => {
                   setTender(raw === "" ? null : Math.max(0, Number(raw) || 0));
                   setChargeError(null);
                 }}
-                inputMode="decimal"
                 placeholder="0.00"
                 aria-label="Amount paid"
                 className="tabular-nums h-[50px] flex-1 rounded-xl border-[1.5px] border-[#dbe3ee] bg-ground px-3.5 text-right text-lg font-extrabold text-ink outline-none focus:border-accent"
@@ -663,7 +694,12 @@ export default function BillingPage() {
 
             {tender !== null && (
               <div className="tabular-nums flex items-center justify-between rounded-xl bg-ground px-3.5 py-2.5 text-sm font-bold">
-                {shortfall > 0 ? (
+                {roundOff > 0 ? (
+                  <>
+                    <span className="text-accent">Round-off · bill becomes {money(round2(total - roundOff))}</span>
+                    <span className="text-accent">−{money(roundOff)}</span>
+                  </>
+                ) : shortfall > 0 ? (
                   <>
                     <span className="text-warning">Still owing</span>
                     <span className="text-warning">{money(shortfall)}</span>
@@ -676,6 +712,35 @@ export default function BillingPage() {
                 )}
               </div>
             )}
+
+            {/* Skip the printout for this one bill — the store setting is the
+                default, this is the exception. */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={printing}
+              onClick={() => setPrintThis(!printing)}
+              className="flex items-center gap-3 rounded-xl border border-border px-3.5 py-2.5 text-left"
+            >
+              <Printer className={`h-[18px] w-[18px] shrink-0 ${printing ? "text-accent" : "text-muted-2"}`} />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-bold">{printing ? "Print receipt" : "Don't print"}</span>
+                <span className="block text-[11px] font-medium text-muted-2">
+                  {printing
+                    ? counterCopyDue
+                      ? "Customer receipt + counter copy"
+                      : "Customer receipt"
+                    : "Bill is saved — reprint it from Bills any time"}
+                </span>
+              </span>
+              <span
+                className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${printing ? "bg-accent" : "bg-border"}`}
+              >
+                <span
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${printing ? "translate-x-[22px]" : "translate-x-0.5"}`}
+                />
+              </span>
+            </button>
 
             {chargeError && (
               <p
@@ -800,8 +865,9 @@ function LineSheet({
   const [amount, setAmount] = useState("");
   const [editingTotal, setEditingTotal] = useState(false);
 
-  const qtyValue = Math.max(0, Number(qty) || 0);
-  const priceValue = Math.max(0, Number(price) || 0);
+  // An emptied box (tapped, nothing typed yet) still means the old value.
+  const qtyValue = qty === "" ? line.qty : Math.max(0, Number(qty) || 0);
+  const priceValue = price === "" ? line.price : Math.max(0, Number(price) || 0);
   const lineTotal = round2(qtyValue * priceValue);
 
   /** Quantity for an amount at a price, to the gram (3 decimals). */
@@ -870,12 +936,10 @@ function LineSheet({
           >
             −
           </button>
-          <input
+          <NumField
             autoFocus
             value={qty}
-            onChange={(e) => changeQty(e.target.value)}
-            // Decimal keypad: weighed goods sell as 2.5 kg.
-            inputMode="decimal"
+            onValue={changeQty}
             aria-label="Quantity"
             className="tabular-nums h-[54px] flex-1 rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground text-center text-2xl font-extrabold text-ink outline-none focus:border-accent"
           />
@@ -891,10 +955,9 @@ function LineSheet({
           Price each
         </div>
         {canEditPrice ? (
-          <input
+          <NumField
             value={price}
-            onChange={(e) => changePrice(e.target.value)}
-            inputMode="decimal"
+            onValue={changePrice}
             aria-label="Price each"
             className="tabular-nums h-[54px] w-full rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground px-4 text-right text-2xl font-extrabold text-ink outline-none focus:border-accent"
           />
@@ -919,15 +982,13 @@ function LineSheet({
           <span className="shrink-0 text-sm font-semibold text-accent">Line total</span>
           {/* Shows quantity × price; typing an amount here works the quantity
               out from the price each instead. */}
-          <input
+          <NumField
             value={editingTotal || amount ? amount : String(lineTotal)}
-            onFocus={() => {
-              setEditingTotal(true);
-              if (!amount && lineTotal > 0) setAmount(String(lineTotal));
-            }}
+            onValue={changeAmount}
+            restoreOnBlur={false}
+            onFocus={() => setEditingTotal(true)}
             onBlur={() => setEditingTotal(false)}
-            onChange={(e) => changeAmount(e.target.value)}
-            inputMode="decimal"
+            placeholder={String(lineTotal)}
             disabled={priceValue <= 0}
             aria-label="Line total — type an amount to work out the quantity"
             className="tabular-nums w-full min-w-0 rounded-lg border border-accent/30 bg-surface px-2.5 py-1.5 text-right text-lg font-extrabold text-accent outline-none focus:border-accent disabled:opacity-50"
@@ -1038,6 +1099,7 @@ function CustomerPicker({
   onClose: () => void;
 }) {
   const { customers, loading } = useCustomers();
+  const { can } = useCan();
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -1108,12 +1170,14 @@ function CustomerPicker({
           </div>
         )}
 
-        <button
-          onClick={() => setCreating(true)}
-          className="mt-3 min-h-[50px] w-full rounded-xl border border-accent text-sm font-bold text-accent"
-        >
-          + New customer
-        </button>
+        {can("addCustomers") && (
+          <button
+            onClick={() => setCreating(true)}
+            className="mt-3 min-h-[50px] w-full rounded-xl border border-accent text-sm font-bold text-accent"
+          >
+            + New customer
+          </button>
+        )}
 
         {creating && (
           <CustomerSheet

@@ -7,12 +7,12 @@ import { useCustomerBills } from "@/lib/firestore/bills";
 import { useCreditPayments } from "@/lib/firestore/credit";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import { useProducts } from "@/lib/firestore/products";
+import { useCategories } from "@/lib/firestore/categories";
 import { useUsers } from "@/lib/firestore/users";
-import { todayKey } from "@/lib/firestore/farmDays";
 import Stat from "@/components/ui/Stat";
 import ReportTabs from "@/components/ReportTabs";
 import { usePermissionGate } from "@/components/AdminGate";
-import { money, dateAndTime } from "@/lib/format";
+import { money, dateAndTime, todayKey } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
 import {
   BILL_COLUMNS,
@@ -45,7 +45,7 @@ export default function IndividualCustomerReportPage() {
 }
 
 function IndividualCustomerReport() {
-  const gate = usePermissionGate("viewReports", "Reports", "An admin can turn on “View day reports” for cashiers in Settings.");
+  const gate = usePermissionGate("customerReports", "Customer reports", "An admin can turn on “Customer reports” for cashiers under Permissions.");
   const router = useRouter();
   const params = useSearchParams();
   const selectedId = params.get("id");
@@ -156,6 +156,7 @@ function CustomerStatement({ customer, onChange }: { customer: Customer; onChang
   const { payments, loading: paymentsLoading } = useCreditPayments(customer.id);
   const { products } = useProducts();
   const { users } = useUsers();
+  const { categories: allCategories } = useCategories();
 
   const [rangeMode, setRangeMode] = useState<RangeMode>("thisMonth");
   const [customFrom, setCustomFrom] = useState(today);
@@ -182,8 +183,12 @@ function CustomerStatement({ customer, onChange }: { customer: Customer; onChang
   const ctx: ReportContext = useMemo(() => {
     const categories = new Map(products.map((p) => [p.id, p.category]));
     const names = new Map(users.map((u) => [u.uid, u.name]));
-    return { categoryOf: (id) => categories.get(id), userName: (uid) => names.get(uid) };
-  }, [products, users]);
+    const byId = new Map(allCategories.map((c) => [c.id, c.name]));
+    return {
+      categoryOf: (id, categoryId) => (categoryId && byId.get(categoryId)) || categories.get(id),
+      userName: (uid) => names.get(uid),
+    };
+  }, [products, users, allCategories]);
 
   const printRange = { from: localDateKey(range.startMs), to: localDateKey(range.endMs - 1) };
   const history = [...row.bills, ...row.voidBills];

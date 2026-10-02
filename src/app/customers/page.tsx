@@ -6,6 +6,7 @@ import CustomerSheet from "@/components/CustomerSheet";
 import { useCustomerBills } from "@/lib/firestore/bills";
 import { useCreditPayments } from "@/lib/firestore/credit";
 import { useAuth } from "@/lib/auth";
+import { useCan } from "@/lib/firestore/permissions";
 import { dateAndTime, money } from "@/lib/format";
 import type { Customer, CustomerType } from "@/lib/types";
 
@@ -18,6 +19,7 @@ export default function CustomersPage() {
   const [viewing, setViewing] = useState<Customer | null>(null);
 
   const isAdmin = profile?.role === "admin";
+  const { can } = useCan();
 
   const rows = useMemo(
     () => customers.filter((c) => matchesCustomerSearch(c, search)),
@@ -34,12 +36,14 @@ export default function CustomersPage() {
           <h1 className="text-2xl font-extrabold tracking-tight">Customers</h1>
           <p className="text-sm font-medium text-muted">Shops and people who buy on credit</p>
         </div>
-        <button
-          onClick={() => setCreating(true)}
-          className="min-h-[46px] shrink-0 rounded-xl bg-accent px-4 text-sm font-bold text-white"
-        >
-          + New customer
-        </button>
+        {can("addCustomers") && (
+          <button
+            onClick={() => setCreating(true)}
+            className="min-h-[46px] shrink-0 rounded-xl bg-accent px-4 text-sm font-bold text-white"
+          >
+            + New customer
+          </button>
+        )}
       </div>
 
       <div className="mt-3 flex gap-2">
@@ -94,12 +98,14 @@ export default function CustomersPage() {
                 </div>
                 <div className="text-[10px] font-bold uppercase tracking-wide text-muted-2">owed</div>
               </div>
-              <button
-                onClick={() => setEditing(c)}
-                className="shrink-0 rounded-lg border border-border px-2.5 py-2 text-[11px] font-bold text-muted"
-              >
-                Edit
-              </button>
+              {can("editCustomers") && (
+                <button
+                  onClick={() => setEditing(c)}
+                  className="shrink-0 rounded-lg border border-border px-2.5 py-2 text-[11px] font-bold text-muted"
+                >
+                  Edit
+                </button>
+              )}
             </div>
           ))}
           {rows.length === 0 && (

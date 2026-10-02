@@ -3,7 +3,6 @@
 import { useMemo } from "react";
 import { useAdminGate } from "@/components/AdminGate";
 import { useBills } from "@/lib/firestore/bills";
-import { useProducts } from "@/lib/firestore/products";
 import { useUsers } from "@/lib/firestore/users";
 import Stat from "@/components/ui/Stat";
 import { money, initials, localDateKey } from "@/lib/format";
@@ -13,7 +12,6 @@ const dayKey = localDateKey;
 export default function DashboardPage() {
   const gate = useAdminGate("The dashboard", "It covers the whole shop's takings and staff, so it stays with admins.");
   const { bills, loading: billsLoading } = useBills();
-  const { products } = useProducts();
   const { users, loading: usersLoading } = useUsers();
 
   const today = localDateKey();
@@ -101,7 +99,6 @@ export default function DashboardPage() {
   }, [users, todaysBills]);
 
   const unsyncedCount = bills.filter((b) => !b.synced).length;
-  const lowStock = products.filter((p) => p.minLevel !== null && (p.onShelf ?? 0) <= (p.minLevel ?? 0));
 
   const alerts = [
     unsyncedCount > 0 && {
@@ -114,11 +111,6 @@ export default function DashboardPage() {
       body: "Review void reasons in Bills.",
       mark: "border-l-danger",
     },
-    ...lowStock.map((p) => ({
-      title: `${p.name} low`,
-      body: `${p.onShelf ?? 0} left on shelf — see Stock.`,
-      mark: "border-l-accent",
-    })),
   ].filter(Boolean) as { title: string; body: string; mark: string }[];
 
 

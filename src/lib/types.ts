@@ -1,30 +1,40 @@
+export interface Category {
+  id: string;
+  name: string;
+  /** Default unit for products created in it — "kg" for chicken, "pcs" for eggs. */
+  unit: string;
+  /** Print a second, kitchen-side ticket when a bill has anything from here
+   *  (the old app did this for chicken, so the cutting counter gets a slip). */
+  counterCopy: boolean;
+  /** Accent for chips and tiles. One of CATEGORY_COLORS. */
+  color: string;
+  sortOrder: number;
+  active: boolean;
+}
+
 export interface Product {
   id: string;
   name: string;
   price: number;
-  lastPrice: number;
   /** What we paid for it. Admin-only — margin comes from price - costPrice. */
   costPrice: number;
-  /** "pieces", "kg"… carried over from the Flutter app's stock items. */
+  /** "kg", "pcs"… printed beside the quantity on the receipt. */
   unit: string;
+  categoryId: string;
+  /** Denormalised category name, so bills and reports need no join. */
   category: string;
   barcode: string | null;
-  isBakery: boolean;
-  expiryDate: string | null;
-  minLevel: number | null;
-  maxLevel: number | null;
   active: boolean;
-  onShelf?: number;
-  /**
-   * Product photo. Named to match the Flutter app's `stocks.imageUrl` so the
-   * migration can copy the URL straight across.
-   */
+  sortOrder: number;
   imageUrl: string | null;
 }
 
 export interface BillLine {
   productId: string;
   name: string;
+  /** The product's category when it was sold, so a later move to another
+   *  category doesn't rewrite past reports. Absent on early bills. */
+  categoryId?: string;
   qty: number;
   /** What was actually charged — the cashier may have overridden it. */
   price: number;
@@ -64,6 +74,12 @@ export interface Bill {
   paid: number;
   /** total - paid. Falls to 0 as credit payments land. */
   due: number;
+  /**
+   * Knocked off a walk-in's bill when they paid a little short (Settings →
+   * walk-in round-off). `total` is already net of it; the lines still add up
+   * to total + discount.
+   */
+  discount: number;
 }
 
 export type PaymentType = "cash" | "credit";
@@ -105,11 +121,3 @@ export interface CreditPayment {
 }
 
 export type Role = "cashier" | "admin";
-
-export interface BakeryDayItem {
-  productId: string;
-  name: string;
-  received: number;
-  sold: number;
-  returned: number;
-}

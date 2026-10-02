@@ -13,6 +13,11 @@ import {
   useCreditPayments,
 } from "@/lib/firestore/credit";
 import { useAuth } from "@/lib/auth";
+import { useCan } from "@/lib/firestore/permissions";
+import { useStoreSettings } from "@/lib/firestore/settings";
+import { printTickets } from "@/lib/printer";
+import { paymentReceipt } from "@/lib/receipts";
+import NumField from "@/components/ui/NumField";
 import { dateAndTime, money } from "@/lib/format";
 import type { Customer, CreditPayment } from "@/lib/types";
 
@@ -21,6 +26,8 @@ type Tab = "Collect" | "History";
 export default function CreditPage() {
   const [tab, setTab] = useState<Tab>("Collect");
   const [selected, setSelected] = useState<Customer | null>(null);
+  const { can } = useCan();
+  const tabs: Tab[] = can("viewPaymentHistory") ? ["Collect", "History"] : ["Collect"];
 
   return (
     <div className="mx-auto max-w-3xl p-4 pb-8">
@@ -30,7 +37,7 @@ export default function CreditPage() {
       </div>
 
       <div className="mt-3 flex gap-1.5 rounded-xl bg-[#e9edf4] p-1">
-        {(["Collect", "History"] as Tab[]).map((t) => (
+        {tabs.map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -43,7 +50,7 @@ export default function CreditPage() {
         ))}
       </div>
 
-      {tab === "Collect" ? <CollectTab selected={selected} onSelect={setSelected} /> : <HistoryTab />}
+      {tab === "Collect" || !tabs.includes(tab) ? <CollectTab selected={selected} onSelect={setSelected} /> : <HistoryTab />}
     </div>
   );
 }
@@ -130,6 +137,7 @@ function CollectTab({
 function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () => void }) {
   const { bills, loading } = useCustomerBills(customer.id);
   const { profile, user } = useAuth();
+  const { settings } = useStoreSettings();
   const [amountText, setAmountText] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
@@ -160,6 +168,21 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
       });
       const applied = result.allocations.reduce((sum, a) => sum + a.amount, 0);
       setDone(`${money(applied)} received from ${customer.name}`);
+      // The old app handed the customer a payment slip every time.
+      if (settings.printBills) {
+        printTickets([
+          paymentReceipt({
+            paperWidth: settings.paperWidth,
+            customerName: customer.name,
+            amount: applied,
+            balanceBefore: owed,
+          }),
+        ])
+          .then((r) => {
+            if (!r.success) setDone(`${money(applied)} received — receipt not printed (${r.error})`);
+          })
+          .catch(() => {});
+      }
       setAmountText("");
       setNote("");
     } catch (err) {
@@ -237,11 +260,11 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
           Amount received
         </div>
         <div className="flex items-center gap-2.5">
-          <input
+          <NumField
             value={amountText}
-            onChange={(e) => setAmountText(e.target.value)}
-            inputMode="decimal"
+            onValue={setAmountText}
             placeholder="0"
+            aria-label="Amount received"
             className="tabular-nums h-[54px] flex-1 rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground px-3.5 text-2xl font-extrabold text-ink"
           />
           <button

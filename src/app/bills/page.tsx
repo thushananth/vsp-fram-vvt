@@ -5,11 +5,17 @@ import { ChevronLeft, ChevronRight, Download, Search, X } from "lucide-react";
 import { useBills, voidBill, retryJournalledBill } from "@/lib/firestore/bills";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/firestore/permissions";
-import { printReceipt } from "@/lib/printer";
-import { money, dateAndTime } from "@/lib/format";
+import { printTickets } from "@/lib/printer";
+import { billTickets, needsCounterCopy } from "@/lib/receipts";
+import { downloadBillPdf } from "@/lib/pdf/billPdf";
+import { useProducts } from "@/lib/firestore/products";
+import { useCategories } from "@/lib/firestore/categories";
+import { useStoreSettings } from "@/lib/firestore/settings";
+import { useUsers } from "@/lib/firestore/users";
+import { useCustomers } from "@/lib/firestore/customers";
+import { money, dateAndTime, todayKey } from "@/lib/format";
 import { useBillJournal, type JournalEntry } from "@/lib/billJournal";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
-import { todayKey } from "@/lib/firestore/farmDays";
 import Stat from "@/components/ui/Stat";
 import {
   billToExportable,
@@ -37,6 +43,12 @@ export default function BillsPage() {
   const { bills, loading } = useBills();
   const { profile } = useAuth();
   const { permissions } = usePermissions();
+  const { products } = useProducts({ includeInactive: true });
+  const { categories } = useCategories();
+  const { settings } = useStoreSettings();
+  const { users } = useUsers();
+  const { customers } = useCustomers();
+  const [printNotice, setPrintNotice] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("All");
   // Today by default — a shop opening Bills mid-shift wants right now, not
   // the whole history. The range picker widens it from there.
@@ -152,25 +164,32 @@ export default function BillsPage() {
     return filtered.map(billToExportable);
   }
 
+  const unitOf = (productId: string) => products.find((p) => p.id === productId)?.unit ?? "";
+  const cashierName = (uid: string) => users.find((u) => u.uid === uid)?.name;
+
   function handleReprint(bill: Bill) {
     if (!canReprint) return;
-    printReceipt({
-      lines: [
-        "Chicken Farm POS",
-        `Bill #${bill.no}`,
-        ...(bill.customerName ? [`Customer: ${bill.customerName}`] : []),
-        "--------------------------------",
-        ...bill.lines.map(
-          (l) => `${l.name}  ${l.qty} x ${money(l.price)}  ${money(l.price * l.qty)}`,
-        ),
-        "--------------------------------",
-        `Total: ${money(bill.total)}`,
-        ...(bill.paymentType === "credit"
-          ? [`Paid: ${money(bill.paid)}`, `Due: ${money(bill.due)}`]
-          : [`Tender: ${money(bill.tender)}`, `Change: ${money(bill.change)}`]),
-      ],
-      cuts: true,
-    }).catch(() => {});
+    setPrintNotice(`Printing bill #${bill.no}…`);
+    printTickets(
+      billTickets(bill, {
+        paperWidth: settings.paperWidth,
+        unitOf,
+        cashierName: cashierName(bill.cashierId),
+        reprint: true,
+        withCounterCopy: settings.printCounterCopy && needsCounterCopy(bill, products, categories),
+      }),
+    )
+      .then((r) => setPrintNotice(r.success ? null : `Couldn't print — ${r.error}`))
+      .catch(() => setPrintNotice(null));
+  }
+
+  function handlePdf(bill: Bill) {
+    if (!canReprint) return;
+    void downloadBillPdf(bill, {
+      unitOf,
+      cashierName: cashierName(bill.cashierId),
+      customerMobile: customers.find((c) => c.id === bill.customerId)?.mobileNumber || undefined,
+    });
   }
 
   return (
@@ -420,6 +439,7 @@ export default function BillsPage() {
                 voiding={voiding}
                 onVoid={() => setConfirmingVoid(selected)}
                 onReprint={() => handleReprint(selected)}
+                onPdf={() => handlePdf(selected)}
               />
             </div>
           )}
@@ -483,9 +503,19 @@ export default function BillsPage() {
               voiding={voiding}
               onVoid={() => setConfirmingVoid(opened)}
               onReprint={() => handleReprint(opened)}
+              onPdf={() => handlePdf(opened)}
               onClose={() => setSelectedId(null)}
             />
           </div>
+        </div>
+      )}
+
+      {printNotice && (
+        <div className="fixed inset-x-4 bottom-[72px] z-40 mx-auto max-w-md rounded-xl bg-ink px-4 py-3 text-center text-sm font-semibold text-white">
+          {printNotice}
+          <button onClick={() => setPrintNotice(null)} className="ml-3 underline">
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -537,6 +567,7 @@ function BillDetail({
   voiding,
   onVoid,
   onReprint,
+  onPdf,
   onClose,
 }: {
   bill: Bill;
@@ -545,6 +576,7 @@ function BillDetail({
   voiding: boolean;
   onVoid: () => void;
   onReprint: () => void;
+  onPdf: () => void;
   onClose?: () => void;
 }) {
   return (
@@ -603,6 +635,12 @@ function BillDetail({
         </div>
       ))}
 
+      {bill.discount > 0 && (
+        <div className="tabular-nums flex justify-between pt-3 text-xs font-semibold text-muted">
+          <span>Round-off</span>
+          <span>−{money(bill.discount)}</span>
+        </div>
+      )}
       <div className="flex items-baseline justify-between pt-3.5">
         <div className="text-xs font-bold uppercase tracking-wider text-muted">Total</div>
         <div className="tabular-nums text-2xl font-extrabold">{money(bill.total)}</div>
@@ -627,6 +665,13 @@ function BillDetail({
           Reprint
         </button>
         <button
+          disabled={!canReprint}
+          onClick={onPdf}
+          className="min-h-[52px] flex-1 rounded-xl border border-border text-[15px] font-bold disabled:opacity-40"
+        >
+          PDF
+        </button>
+        <button
           disabled={!canVoid || bill.status === "void" || voiding}
           onClick={onVoid}
           className="min-h-[52px] flex-1 rounded-xl border border-danger/40 text-[15px] font-bold text-danger disabled:opacity-40"
@@ -636,13 +681,13 @@ function BillDetail({
       </div>
       {!canVoid && (
         <p className="mt-3 text-xs font-medium text-muted-2">
-          Deleting a bill isn&apos;t enabled for cashiers — an admin can turn this on in Settings.
+          Deleting a bill isn&apos;t enabled for cashiers — an admin can turn this on under Permissions.
         </p>
       )}
       {!canReprint && (
         <p className="mt-2 text-xs font-medium text-muted-2">
-          Reprinting a receipt isn&apos;t enabled for cashiers — an admin can turn this on in
-          Settings.
+          Reprinting a receipt isn&apos;t enabled for cashiers — an admin can turn this on under
+          Permissions.
         </p>
       )}
 

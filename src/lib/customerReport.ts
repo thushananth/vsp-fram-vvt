@@ -112,7 +112,7 @@ function esc(s: string): string {
  * up. Both optional; a missing lookup just leaves the cell blank.
  */
 export interface ReportContext {
-  categoryOf?: (productId: string) => string | undefined;
+  categoryOf?: (productId: string, categoryId?: string) => string | undefined;
   userName?: (uid: string) => string | undefined;
 }
 
@@ -163,7 +163,7 @@ export function billLineRows(bills: Bill[], customerName: string, ctx: ReportCon
       time: timeKey(b.createdAt),
       customer: b.customerName || customerName,
       refNo: String(b.no),
-      item: ctx.categoryOf?.(l.productId) ?? "",
+      item: ctx.categoryOf?.(l.productId, l.categoryId) ?? "",
       subItem: l.name,
       // Only an overridden line carries listPrice — anything else sold at list.
       discount: l.listPrice !== undefined ? Math.max(0, (l.listPrice - l.price) * l.qty) : 0,

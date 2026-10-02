@@ -52,6 +52,8 @@ interface BillDraft {
   paymentType: PaymentType;
   customerId: string | null;
   customerName: string | null;
+  /** Walk-in round-off already taken off `total`. Absent on older journal entries. */
+  discount?: number;
 }
 
 function round2(n: number): number {
@@ -106,6 +108,7 @@ function commitBill(draft: BillDraft): Promise<void> {
     paymentType: draft.paymentType,
     paid,
     due,
+    discount: draft.discount ?? 0,
   });
 
   // Only the unpaid remainder goes on the balance — a bill part-settled at the
@@ -136,6 +139,7 @@ export function createBill(params: {
   customerId: string | null;
   customerName: string | null;
   paid: number;
+  discount?: number;
 }): CreatedBill {
   // A backstop, not the user-facing check — the till blocks a short payment
   // from a walk-in before it ever gets here, with a warning the cashier reads.
@@ -281,6 +285,7 @@ function toBill(id: string, data: Record<string, unknown>, pending: boolean): Bi
     paymentType,
     paid: (data.paid as number) ?? total,
     due: (data.due as number) ?? 0,
+    discount: (data.discount as number) ?? 0,
   };
 }
 
