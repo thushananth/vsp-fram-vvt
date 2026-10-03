@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { addDoc, collection, doc, onSnapshot, setDoc } from "firebase/firestore";
+import { addDoc, collection, doc, onSnapshot, setDoc, writeBatch } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth, db } from "@/lib/firebase";
 import type { Product } from "@/lib/types";
@@ -99,4 +99,20 @@ export async function updateProduct(productId: string, input: ProductInput) {
 /** Hidden from the till, kept for history — old bills still point at it. */
 export async function setProductActive(productId: string, active: boolean) {
   await setDoc(doc(db, "products", productId), { active }, { merge: true });
+}
+
+/**
+ * Save the till's product order. Every listed product is renumbered (10, 20,
+ * 30…) rather than swapping the moved ones' values — products imported with
+ * the same sortOrder would otherwise still tie and fall back to name order.
+ */
+export async function saveProductOrder(orderedIds: string[]) {
+  // A batch holds 500 writes; a shop's catalogue can outgrow one.
+  for (let start = 0; start < orderedIds.length; start += 450) {
+    const batch = writeBatch(db);
+    orderedIds.slice(start, start + 450).forEach((id, i) => {
+      batch.set(doc(db, "products", id), { sortOrder: (start + i + 1) * 10 }, { merge: true });
+    });
+    await batch.commit();
+  }
 }

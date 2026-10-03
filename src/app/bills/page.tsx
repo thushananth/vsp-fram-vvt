@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { lineAmount } from "@/lib/billLines";
 import { ChevronLeft, ChevronRight, Download, Search, X } from "lucide-react";
 import { useBills, voidBill, retryJournalledBill } from "@/lib/firestore/bills";
 import { useAuth } from "@/lib/auth";
@@ -630,7 +631,7 @@ function BillDetail({
             {l.qty}
           </div>
           <div className="tabular-nums w-20 text-right text-sm font-bold">
-            {money(l.price * l.qty)}
+            {money(lineAmount(l))}
           </div>
         </div>
       ))}

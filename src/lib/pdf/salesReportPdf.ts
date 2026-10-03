@@ -1,4 +1,5 @@
 import type { jsPDF } from "jspdf";
+import { lineAmount } from "@/lib/billLines";
 import { SHOP_DETAILS } from "@/lib/constants";
 import { localDateKey } from "@/lib/format";
 import type { SalesReport } from "@/lib/salesReport";
@@ -17,7 +18,7 @@ import {
 
 type AutoTable = Awaited<ReturnType<typeof loadPdf>>["autoTable"];
 
-interface Ctx {
+export interface Ctx {
   doc: jsPDF;
   autoTable: AutoTable;
   y: number;
@@ -34,7 +35,7 @@ function ensure(c: Ctx, needed: number) {
 }
 
 /** Section title with the brand's amber tick. */
-function section(c: Ctx, title: string, note?: string) {
+export function section(c: Ctx, title: string, note?: string) {
   ensure(c, 22);
   c.y += 3;
   c.doc.setFillColor(...BRAND.amber).roundedRect(c.m, c.y - 4, 1.4, 5.5, 0.7, 0.7, "F");
@@ -49,7 +50,7 @@ function section(c: Ctx, title: string, note?: string) {
   c.y += 4;
 }
 
-function table(
+export function table(
   c: Ctx,
   head: string[],
   body: (string | number)[][],
@@ -78,7 +79,7 @@ function table(
 }
 
 /** Four headline figures as cards across the page. */
-function kpis(c: Ctx, cards: { label: string; value: string; accent?: boolean }[]) {
+export function kpis(c: Ctx, cards: { label: string; value: string; accent?: boolean }[]) {
   const w = c.doc.internal.pageSize.getWidth() - c.m * 2;
   const gap = 3;
   const cw = (w - gap * (cards.length - 1)) / cards.length;
@@ -238,7 +239,7 @@ function billRows(bills: Bill[], userName: (uid: string) => string, unitOf: (id:
       l.name,
       `${pdfQty(l.qty)} ${unitOf(l.productId)}`.trim(),
       pdfAmount(l.price),
-      pdfAmount(l.price * l.qty),
+      pdfAmount(lineAmount(l)),
       i === 0 ? (b.paymentType === "credit" ? "CREDIT" : "CASH") : "",
       i === 0 ? userName(b.cashierId) : "",
     ]),

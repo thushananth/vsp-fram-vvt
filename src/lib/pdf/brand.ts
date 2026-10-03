@@ -1,5 +1,5 @@
 import type { jsPDF } from "jspdf";
-import { SHOP_DETAILS } from "@/lib/constants";
+import { POWERED_BY_LINE, SHOP_DETAILS } from "@/lib/constants";
 import { localDateKey } from "@/lib/format";
 
 /**
@@ -86,7 +86,7 @@ export function letterhead(
   return h + 10;
 }
 
-/** Page numbers and the shop line on every page — call once, at the end. */
+/** Page numbers, the shop line and the maker's credit on every page — call once, at the end. */
 export function footers(doc: jsPDF, note: string) {
   const w = doc.internal.pageSize.getWidth();
   const h = doc.internal.pageSize.getHeight();
@@ -97,6 +97,8 @@ export function footers(doc: jsPDF, note: string) {
     doc.setFont("helvetica", "normal").setFontSize(7).setTextColor(...BRAND.muted);
     doc.text(note, 12, h - 7);
     doc.text(`Page ${i} of ${pages}`, w - 12, h - 7, { align: "right" });
+    doc.setFont("helvetica", "bold").setTextColor(...BRAND.amber);
+    doc.text(POWERED_BY_LINE.replace(" · ", "  ·  "), w / 2, h - 3.5, { align: "center" });
   }
 }
 

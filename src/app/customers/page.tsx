@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import CustomerSheet from "@/components/CustomerSheet";
 import { useCustomerBills } from "@/lib/firestore/bills";
-import { useCreditPayments } from "@/lib/firestore/credit";
+import { useCreditPayments, describePayment } from "@/lib/firestore/credit";
 import { useAuth } from "@/lib/auth";
 import { useCan } from "@/lib/firestore/permissions";
 import { dateAndTime, money } from "@/lib/format";
@@ -97,6 +97,9 @@ export default function CustomersPage() {
                   {money(c.remainingCredit)}
                 </div>
                 <div className="text-[10px] font-bold uppercase tracking-wide text-muted-2">owed</div>
+                {c.advance > 0 && (
+                  <div className="tabular-nums text-[11px] font-bold text-success">+{money(c.advance)} advance</div>
+                )}
               </div>
               {can("editCustomers") && (
                 <button
@@ -162,6 +165,12 @@ function CustomerHistorySheet({ customer, onClose }: { customer: Customer; onClo
             Includes {money(customer.openingBalance)} carried over from the old app.
           </p>
         )}
+        {customer.advance > 0 && (
+          <div className="mt-2 flex items-center justify-between rounded-xl bg-success/5 px-3.5 py-3">
+            <span className="text-sm font-semibold text-success">Advance held</span>
+            <span className="tabular-nums text-xl font-extrabold text-success">{money(customer.advance)}</span>
+          </div>
+        )}
 
         <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">
           Credit bills
@@ -211,9 +220,7 @@ function CustomerHistorySheet({ customer, onClose }: { customer: Customer; onClo
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-bold">{dateAndTime(p.createdAt)}</div>
                   <div className="text-[11px] font-medium text-muted-2">
-                    {p.allocations
-                      .map((a) => (a.billNo ? `#${a.billNo}` : "Opening"))
-                      .join(", ")}
+                    {describePayment(p)}
                   </div>
                 </div>
                 <div className="tabular-nums text-sm font-extrabold text-success">

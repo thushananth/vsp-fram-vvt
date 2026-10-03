@@ -1,4 +1,5 @@
 import { localDateKey } from "@/lib/format";
+import { lineAmount } from "@/lib/billLines";
 import type { Bill, Category, CreditPayment, Customer, Product } from "@/lib/types";
 
 /**
@@ -115,7 +116,9 @@ export function buildSalesReport(params: {
   const all = params.bills.filter((b) => inRange(b.createdAt)).sort((a, b) => a.createdAt - b.createdAt);
   const bills = all.filter((b) => b.status !== "void");
   const voidBills = all.filter((b) => b.status === "void");
-  const payments = params.payments.filter((p) => inRange(p.createdAt)).sort((a, b) => a.createdAt - b.createdAt);
+  // Spending held advance is not money coming in — the cash was counted when
+  // it was paid.
+  const payments = params.payments.filter((p) => p.method !== "advance" && inRange(p.createdAt)).sort((a, b) => a.createdAt - b.createdAt);
 
   const totals: SalesTotals = {
     net: 0,
@@ -178,7 +181,7 @@ export function buildSalesReport(params: {
     else d.cash += b.total;
 
     for (const l of b.lines) {
-      const amount = l.price * l.qty;
+      const amount = lineAmount(l);
       const cat = categoryOf(l.productId, l.categoryId);
       const unit = productById.get(l.productId)?.unit ?? "";
       const discount = l.listPrice !== undefined ? Math.max(0, (l.listPrice - l.price) * l.qty) : 0;
@@ -228,6 +231,7 @@ export function buildSalesReport(params: {
   // snapshot of today, not bound to the range.
   const lastPay = new Map<string, CreditPayment>();
   for (const p of params.payments) {
+    if (p.method === "advance") continue;
     const cur = lastPay.get(p.customerId);
     if (!cur || p.createdAt > cur.createdAt) lastPay.set(p.customerId, p);
   }

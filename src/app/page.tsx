@@ -8,10 +8,13 @@ import { createBill, type CreatedBill } from "@/lib/firestore/bills";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import { useStoreSettings } from "@/lib/firestore/settings";
 import { useCategories } from "@/lib/firestore/categories";
-import { LayoutGrid, List, Printer, Search, ShoppingBasket, X } from "lucide-react";
+import { ArrowUpDown, LayoutGrid, List, Pencil, Printer, Search, ShoppingBasket, Trash2, X } from "lucide-react";
 import CustomerSheet from "@/components/CustomerSheet";
 import ProductThumb from "@/components/ui/ProductThumb";
 import NumField from "@/components/ui/NumField";
+import LineSheet, { type LineEdit } from "@/components/LineSheet";
+import ArrangeProducts from "@/components/ArrangeProducts";
+import { lineAmount, round2, round3 } from "@/lib/billLines";
 import { printTickets, usePrinter } from "@/lib/printer";
 import { billTickets, needsCounterCopy, testTicket } from "@/lib/receipts";
 import { money } from "@/lib/format";
@@ -20,17 +23,11 @@ import type { Bill, BillLine, Customer, PaymentType, Product } from "@/lib/types
 /** How long a bill may stay unacknowledged before the till calls it queued. */
 const SYNC_GRACE_MS = 2500;
 
-/** Money, not floating point — 0.1 + 0.2 has no place on a receipt. */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-/**
- * Quantities to the gram. Weighed goods sell as 2.5 or 0.266, and plain float
- * arithmetic turns 2.266 - 1 into 1.2659999999999998 on the bill.
- */
-function round3(n: number): number {
-  return Math.round(n * 1000) / 1000;
+/** The line as entered by quantity: a typed amount no longer applies. */
+function byQty(l: BillLine, qty: number): BillLine {
+  const next = { ...l, qty };
+  delete next.amount;
+  return next;
 }
 
 export default function BillingPage() {
@@ -60,6 +57,9 @@ export default function BillingPage() {
   const [dense, setDense] = useState(false);
   /** A short payment waiting on the cashier to confirm it goes on credit. */
   const [confirmingShort, setConfirmingShort] = useState<number | null>(null);
+  /** Admin dragging tiles into the order the till shows them. */
+  const [arranging, setArranging] = useState(false);
+  const isAdmin = profile?.role === "admin";
 
   // Its own permission, not the Stock one: a shop may well want a cashier to
   // discount a bun for a regular without letting them reprice the product.
@@ -85,7 +85,7 @@ export default function BillingPage() {
     });
   }, [products, categoryId, search]);
 
-  const total = round2(cart.reduce((sum, l) => sum + l.price * l.qty, 0));
+  const total = round2(cart.reduce((sum, l) => sum + lineAmount(l), 0));
   const change = tender !== null ? Math.max(0, round2(tender - total)) : 0;
   /** What would still be owed if the bill were charged at this tender. */
   const shortfall = tender !== null ? Math.max(0, round2(total - tender)) : total;
@@ -113,7 +113,7 @@ export default function BillingPage() {
     setCart((prev) => {
       const existing = prev.find((l) => l.productId === p.id);
       if (existing) {
-        return prev.map((l) => (l.productId === p.id ? { ...l, qty: round3(l.qty + 1) } : l));
+        return prev.map((l) => (l.productId === p.id ? byQty(l, round3(l.qty + 1)) : l));
       }
       return [
         ...prev,
@@ -146,33 +146,30 @@ export default function BillingPage() {
     setCart((prev) =>
       qty <= 0
         ? prev.filter((l) => l.productId !== productId)
-        : prev.map((l) => (l.productId === productId ? { ...l, qty } : l)),
+        : prev.map((l) => (l.productId === productId ? byQty(l, qty) : l)),
     );
   }
 
   /**
-   * Change what this bill charges for a line. The product's own price is left
-   * alone — an override is a one-off at the counter, not a price change — but
-   * the list price is stamped on the line so the discount is visible later.
+   * Set a line's quantity, price and (when sold by amount) exact total in one
+   * update. The product's own price is left alone — an override is a one-off
+   * at the counter, not a price change — but the list price is stamped on the
+   * line so the discount is visible later.
    */
-  function setLinePrice(productId: string, price: number) {
+  function applyLine(productId: string, edit: LineEdit) {
     const listPrice = products.find((p) => p.id === productId)?.price;
     setCart((prev) =>
       prev.map((l) => {
         if (l.productId !== productId) return l;
+        const next: BillLine = { ...l, qty: edit.qty, price: edit.price };
         // Back at list price, the override marker comes off again — but the
         // cost stays, because profit still has to be measurable.
-        if (listPrice === undefined || price === listPrice) {
-          return {
-            productId: l.productId,
-            name: l.name,
-            categoryId: l.categoryId,
-            qty: l.qty,
-            price,
-            costPrice: l.costPrice,
-          };
-        }
-        return { ...l, price, listPrice };
+        if (listPrice === undefined || edit.price === listPrice) delete next.listPrice;
+        else next.listPrice = listPrice;
+        // Never written as undefined: Firestore refuses undefined fields.
+        if (edit.amount === undefined) delete next.amount;
+        else next.amount = edit.amount;
+        return next;
       }),
     );
   }
@@ -482,6 +479,19 @@ export default function BillingPage() {
         {/* Photos help pick a bun by sight; a list fits far more of a
             three-hundred-item catalogue on a small screen. Both are useful, so
             the cashier chooses. */}
+        {isAdmin && (
+          <button
+            onClick={() => {
+              setSearch("");
+              setArranging(true);
+            }}
+            aria-label="Arrange products"
+            title="Arrange products — drag them into the order the till shows"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-surface text-muted"
+          >
+            <ArrowUpDown className="h-[18px] w-[18px]" />
+          </button>
+        )}
         <button
           onClick={() => setDense((d) => !d)}
           aria-label={dense ? "Show photos" : "Show a compact list"}
@@ -492,7 +502,18 @@ export default function BillingPage() {
         </button>
       </div>
 
-      {loading ? (
+      {arranging ? (
+        <ArrangeProducts
+          products={products}
+          visibleIds={filtered.map((p) => p.id)}
+          colorOf={colorOf}
+          dense={dense}
+          onDone={(message) => {
+            setArranging(false);
+            if (message) setConfirmation(message);
+          }}
+        />
+      ) : loading ? (
         <p className="py-8 text-center text-muted">Loading products…</p>
       ) : (
         <div
@@ -591,12 +612,12 @@ export default function BillingPage() {
             </div>
             <div className="flex flex-col gap-3">
               {cart.map((l) => (
-                <div key={l.productId} className="flex items-center gap-2.5">
-                  {/* The whole row opens the line sheet — price and a typed
-                      quantity live there; the steppers stay for quick nudges. */}
+                <div key={l.productId} className="rounded-2xl border border-border p-2.5">
+                  {/* Tapping the item opens its sheet too — Edit is there for
+                      anyone who doesn't know that. */}
                   <button
                     onClick={() => setEditingLine(l.productId)}
-                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                    className="flex w-full min-w-0 items-center gap-2.5 text-left"
                   >
                     <ProductThumb
                       name={l.name}
@@ -604,7 +625,7 @@ export default function BillingPage() {
                       size="sm"
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{l.name}</span>
+                      <span className="block truncate text-sm font-bold">{l.name}</span>
                       <span className="tabular-nums block text-[11px] font-medium text-muted-2">
                         {money(l.price)} each
                         {l.listPrice !== undefined && (
@@ -614,25 +635,44 @@ export default function BillingPage() {
                         )}
                       </span>
                     </span>
+                    <span className="tabular-nums shrink-0 text-right text-base font-extrabold">
+                      {money(lineAmount(l))}
+                    </span>
                   </button>
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="mt-2 flex items-center gap-2">
                     <button
                       onClick={() => setQty(l.productId, l.qty - 1)}
-                      className="h-8 w-8 rounded-full border border-border text-lg font-bold"
+                      aria-label={`One less ${l.name}`}
+                      className="h-9 w-9 rounded-full border border-border text-lg font-bold"
                     >
                       −
                     </button>
-                    <span className="min-w-6 text-center tabular-nums">{l.qty}</span>
+                    <span className="tabular-nums min-w-10 text-center text-sm font-bold">
+                      {round3(l.qty)}
+                      <span className="ml-0.5 text-[11px] font-semibold text-muted-2">{unitOf(l.productId)}</span>
+                    </span>
                     <button
                       onClick={() => setQty(l.productId, l.qty + 1)}
-                      className="h-8 w-8 rounded-full border border-border text-lg font-bold"
+                      aria-label={`One more ${l.name}`}
+                      className="h-9 w-9 rounded-full border border-border text-lg font-bold"
                     >
                       +
                     </button>
+                    <span className="flex-1" />
+                    <button
+                      onClick={() => setEditingLine(l.productId)}
+                      className="flex h-9 items-center gap-1.5 rounded-xl border border-border px-3 text-xs font-bold text-ink"
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </button>
+                    <button
+                      onClick={() => removeLine(l.productId)}
+                      aria-label={`Delete ${l.name} from the bill`}
+                      className="flex h-9 items-center gap-1.5 rounded-xl border border-danger/40 px-3 text-xs font-bold text-danger"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Delete
+                    </button>
                   </div>
-                  <span className="w-20 shrink-0 text-right tabular-nums font-semibold">
-                    {money(l.price * l.qty)}
-                  </span>
                 </div>
               ))}
 
@@ -653,6 +693,11 @@ export default function BillingPage() {
                 {customer && customer.remainingCredit > 0 && (
                   <span className="tabular-nums rounded-md bg-warning/10 px-1.5 py-0.5 text-[10px] font-bold text-warning">
                     owes {customer.remainingCredit.toFixed(0)}
+                  </span>
+                )}
+                {customer && customer.advance > 0 && (
+                  <span className="tabular-nums rounded-md bg-success/10 px-1.5 py-0.5 text-[10px] font-bold text-success">
+                    advance {customer.advance.toFixed(0)}
                   </span>
                 )}
                 <span className="text-muted-2">›</span>
@@ -676,7 +721,7 @@ export default function BillingPage() {
             </div>
 
             <div className="flex gap-2">
-              {[total, 500, 1000, 2000].map((amt, i) => (
+              {[total, 1000, 2000, 5000].map((amt, i) => (
                 <button
                   key={i}
                   onClick={() => {
@@ -779,11 +824,12 @@ export default function BillingPage() {
 
       {line && (
         <LineSheet
+          key={line.productId}
           line={line}
+          unit={unitOf(line.productId)}
           imageUrl={products.find((p) => p.id === line.productId)?.imageUrl ?? null}
           canEditPrice={canEditPrices}
-          onQty={(qty) => setQty(line.productId, qty)}
-          onPrice={(price) => setLinePrice(line.productId, price)}
+          onApply={(edit) => applyLine(line.productId, edit)}
           onRemove={() => removeLine(line.productId)}
           onClose={() => setEditingLine(null)}
         />
@@ -831,191 +877,6 @@ export default function BillingPage() {
           </button>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Tapping a line on the bill opens this. Both fields are typed, not stepped —
- * a cashier selling 12 of something shouldn't press + eleven times, and a
- * haggled price has no natural step at all.
- */
-function LineSheet({
-  line,
-  imageUrl,
-  canEditPrice,
-  onQty,
-  onPrice,
-  onRemove,
-  onClose,
-}: {
-  line: BillLine;
-  imageUrl: string | null;
-  canEditPrice: boolean;
-  onQty: (qty: number) => void;
-  onPrice: (price: number) => void;
-  onRemove: () => void;
-  onClose: () => void;
-}) {
-  // Held as text so the field can be emptied mid-edit without snapping to 0.
-  const [qty, setQty] = useState(String(line.qty));
-  const [price, setPrice] = useState(String(line.price));
-  // "Rs 500 worth of chicken": a line total typed in sets the quantity from the
-  // price each. Empty means the quantity is being entered directly, as before.
-  const [amount, setAmount] = useState("");
-  const [editingTotal, setEditingTotal] = useState(false);
-
-  // An emptied box (tapped, nothing typed yet) still means the old value.
-  const qtyValue = qty === "" ? line.qty : Math.max(0, Number(qty) || 0);
-  const priceValue = price === "" ? line.price : Math.max(0, Number(price) || 0);
-  const lineTotal = round2(qtyValue * priceValue);
-
-  /** Quantity for an amount at a price, to the gram (3 decimals). */
-  function qtyFor(amountText: string, priceEach: number): string {
-    const a = Math.max(0, Number(amountText) || 0);
-    if (a <= 0 || priceEach <= 0) return "";
-    return String(Math.round((a / priceEach) * 1000) / 1000);
-  }
-
-  function changeQty(next: string) {
-    setQty(next);
-    setAmount("");
-  }
-
-  function changeAmount(next: string) {
-    setAmount(next);
-    const computed = qtyFor(next, priceValue);
-    if (computed) setQty(computed);
-  }
-
-  function changePrice(next: string) {
-    setPrice(next);
-    // Keep the amount the customer asked for; the quantity follows the price.
-    if (amount) {
-      const computed = qtyFor(amount, Math.max(0, Number(next) || 0));
-      if (computed) setQty(computed);
-    }
-  }
-
-  function apply() {
-    if (qtyValue <= 0) {
-      onRemove();
-      return;
-    }
-    onPrice(priceValue);
-    onQty(round3(qtyValue));
-    onClose();
-  }
-
-  return (
-    <div className="fixed inset-0 z-30 flex items-end bg-ink/50">
-      <div className="mx-auto max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <ProductThumb name={line.name} imageUrl={imageUrl} size="sm" />
-            <div className="min-w-0">
-              <div className="truncate text-xl font-extrabold">{line.name}</div>
-              <div className="text-sm font-medium text-muted">On this bill</div>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="min-h-[42px] shrink-0 rounded-lg border border-border px-3.5 text-sm font-bold text-muted"
-          >
-            Close
-          </button>
-        </div>
-
-        <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">
-          Quantity
-        </div>
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => changeQty(String(Math.max(0, round3(qtyValue - 1))))}
-            className="h-[54px] w-[54px] rounded-2xl border border-border text-2xl font-bold"
-          >
-            −
-          </button>
-          <NumField
-            autoFocus
-            value={qty}
-            onValue={changeQty}
-            aria-label="Quantity"
-            className="tabular-nums h-[54px] flex-1 rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground text-center text-2xl font-extrabold text-ink outline-none focus:border-accent"
-          />
-          <button
-            onClick={() => changeQty(String(round3(qtyValue + 1)))}
-            className="h-[54px] w-[54px] rounded-2xl bg-accent text-2xl font-bold text-white"
-          >
-            +
-          </button>
-        </div>
-
-        <div className="mb-2 mt-4 text-[11px] font-bold uppercase tracking-wider text-muted-2">
-          Price each
-        </div>
-        {canEditPrice ? (
-          <NumField
-            value={price}
-            onValue={changePrice}
-            aria-label="Price each"
-            className="tabular-nums h-[54px] w-full rounded-2xl border-[1.5px] border-[#dbe3ee] bg-ground px-4 text-right text-2xl font-extrabold text-ink outline-none focus:border-accent"
-          />
-        ) : (
-          <div className="tabular-nums flex h-[54px] w-full items-center justify-end rounded-2xl bg-ground px-4 text-2xl font-extrabold text-muted">
-            {money(line.price)}
-          </div>
-        )}
-        {!canEditPrice && (
-          <p className="mt-2 text-xs font-medium text-muted-2">
-            Changing a price on the bill isn&apos;t enabled for cashiers — an admin can turn
-            on &ldquo;Change a price on the bill&rdquo; in Settings.
-          </p>
-        )}
-        {canEditPrice && line.listPrice !== undefined && (
-          <p className="mt-2 text-xs font-bold text-warning">
-            Normal price {money(line.listPrice)} — this bill only.
-          </p>
-        )}
-
-        <label className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-accent/5 px-3.5 py-3">
-          <span className="shrink-0 text-sm font-semibold text-accent">Line total</span>
-          {/* Shows quantity × price; typing an amount here works the quantity
-              out from the price each instead. */}
-          <NumField
-            value={editingTotal || amount ? amount : String(lineTotal)}
-            onValue={changeAmount}
-            restoreOnBlur={false}
-            onFocus={() => setEditingTotal(true)}
-            onBlur={() => setEditingTotal(false)}
-            placeholder={String(lineTotal)}
-            disabled={priceValue <= 0}
-            aria-label="Line total — type an amount to work out the quantity"
-            className="tabular-nums w-full min-w-0 rounded-lg border border-accent/30 bg-surface px-2.5 py-1.5 text-right text-lg font-extrabold text-accent outline-none focus:border-accent disabled:opacity-50"
-          />
-        </label>
-        {amount && qtyValue > 0 && (
-          <p className="tabular-nums mt-2 text-xs font-semibold text-muted">
-            {money(Number(amount) || 0)} ÷ {money(priceValue)} = quantity {qtyValue}
-            {money(lineTotal) !== money(Number(amount) || 0) && ` · charged ${money(lineTotal)}`}
-          </p>
-        )}
-
-        <div className="mt-4 flex gap-2">
-          <button
-            onClick={apply}
-            className="min-h-[54px] flex-[2] rounded-2xl bg-accent text-base font-bold text-white"
-          >
-            Done
-          </button>
-          <button
-            onClick={onRemove}
-            className="min-h-[54px] flex-1 rounded-2xl border border-danger/40 text-base font-bold text-danger"
-          >
-            Remove
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1162,6 +1023,11 @@ function CustomerPicker({
                     owes {c.remainingCredit.toFixed(0)}
                   </span>
                 )}
+                {c.advance > 0 && (
+                  <span className="tabular-nums shrink-0 text-sm font-bold text-success">
+                    +{c.advance.toFixed(0)} adv.
+                  </span>
+                )}
               </button>
             ))}
             {rows.length === 0 && (
@@ -1189,6 +1055,7 @@ function CustomerPicker({
                 ...customer,
                 remainingCredit: 0,
                 openingBalance: 0,
+                advance: 0,
                 active: true,
                 createdAt: Date.now(),
                 updatedAt: Date.now(),

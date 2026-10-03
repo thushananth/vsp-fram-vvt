@@ -51,6 +51,12 @@ export interface BillLine {
    * Absent on bills written before this existed.
    */
   costPrice?: number;
+  /**
+   * The line total, when the cashier typed an amount ("Rs 1500 of chicken")
+   * and the quantity was worked out from it. Charged exactly, instead of the
+   * rounded qty × price. Absent on lines entered by quantity.
+   */
+  amount?: number;
 }
 
 export interface Bill {
@@ -93,6 +99,11 @@ export interface Customer {
   remainingCredit: number;
   /** Debt carried in from the Flutter app, with no bill behind it here. */
   openingBalance: number;
+  /**
+   * Money paid in beyond what was owed (owed 2500, paid 3000 → 500), held for
+   * the customer until it is used against a later bill from the Credit screen.
+   */
+  advance: number;
   active: boolean;
   createdAt: number;
   updatedAt: number;
@@ -112,9 +123,18 @@ export interface CreditPayment {
   id: string;
   customerId: string;
   customerName: string;
+  /** Cash taken; for an "advance" payment, the advance spent on bills. */
   amount: number;
-  method: "cash";
+  /** "advance" spends held advance on bills — no cash changed hands. */
+  method: "cash" | "advance";
   allocations: CreditAllocation[];
+  /** Part of a cash payment that was beyond what was owed, kept as advance. */
+  advance: number;
+  /**
+   * Brought across from the old app's LoanPayment history. A record only: it
+   * cleared no bill here, and the balance it reduced was migrated already.
+   */
+  imported: boolean;
   receivedBy: string;
   createdAt: number;
   note: string | null;

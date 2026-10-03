@@ -20,3 +20,11 @@ export const SHOP_DETAILS = {
   address: "Theniyambai, Valvettithurai, Sri Lanka",
   phone: "077 023 8493",
 } as const;
+
+// Credit line on receipts and every PDF — the software's maker.
+export const POWERED_BY = {
+  name: "5XCODES",
+  phone: "+94 76 770 7544",
+} as const;
+
+export const POWERED_BY_LINE = `Powered by ${POWERED_BY.name} · ${POWERED_BY.phone}`;

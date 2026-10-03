@@ -1,8 +1,8 @@
 # New-device approval
 
 A browser that has never been approved cannot open the till. On every load the
-client registers its device; if the device is unknown, every admin is emailed a
-6-digit code together with the device details, and the app stays locked behind
+client registers its device; if the device is unknown, the approval addresses
+(see below) are emailed a 6-digit code together with the device details, and the app stays locked behind
 `DeviceGate` until someone types that code or an admin approves the device from
 **Devices**.
 
@@ -15,11 +15,19 @@ can never lock an admin out of the switch itself.
 It ships **off**. With no SMTP configured and no device yet approved, defaulting
 it on would lock a working shop out of its own till.
 
+## Who gets the code
+
+Settings → Security → **Approval code emails** lists the addresses codes are
+sent to. Leave it empty and codes go to every active admin's login email, so
+clearing the list never leaves nobody to ask. **Send test email** mails a
+sample (code `123456`, nothing waiting) to the saved list — use it to check
+SMTP after changing `functions/.env` or deploying.
+
 ## SMTP
 
 Copy `functions/.env.example` to `functions/.env` and fill it in — the file is
 gitignored, and `firebase deploy --only functions` uploads it as the deployed
-functions' environment. Mail goes out as `noreply@5xcodes.com` (`SMTP_FROM`).
+functions' environment. Port 465 uses TLS directly; 587 uses STARTTLS. Mail goes out as `noreply@5xcodes.com` (`SMTP_FROM`).
 
 Mail is **best effort**. If sending fails, the device request still stands, the
 error is recorded on the device doc and shown on the Devices screen, and an
@@ -49,6 +57,7 @@ admins' inboxes.
 - `setDeviceStatus({ deviceId, status, details? })` — admin approve/block/re-pend.
   `details` lets an admin register-and-approve a device that hasn't called in yet.
 - `removeDevice({ deviceId })` — forget a device; it comes back as new.
+- `sendTestDeviceEmail()` — admin-only; mails a sample to the current recipients.
 
 ## What this does and does not stop
 

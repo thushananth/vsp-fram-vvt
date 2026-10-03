@@ -1,4 +1,5 @@
 import { SHOP_DETAILS } from "@/lib/constants";
+import { lineAmount } from "@/lib/billLines";
 import type { Bill } from "@/lib/types";
 import {
   BRAND,
@@ -64,7 +65,7 @@ export async function downloadBillPdf(
       l.listPrice !== undefined ? `${l.name}\n(normally ${pdfAmount(l.listPrice)})` : l.name,
       `${pdfQty(l.qty)} ${ctx.unitOf(l.productId)}`.trim(),
       pdfAmount(l.price),
-      pdfAmount(l.price * l.qty),
+      pdfAmount(lineAmount(l)),
     ]),
     ...tableStyle(9, [1, 2, 3]),
     columnStyles: {

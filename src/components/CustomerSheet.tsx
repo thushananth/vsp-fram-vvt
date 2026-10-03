@@ -114,6 +114,12 @@ export default function CustomerSheet({
           </p>
         )}
 
+        {customer && customer.advance > 0 && (
+          <p className="tabular-nums rounded-xl bg-success/5 px-3.5 py-3 text-sm font-semibold text-success">
+            Holds {money(customer.advance)} advance — use it from the Credit screen.
+          </p>
+        )}
+
         {error && <p className="text-sm font-semibold text-danger">{error}</p>}
 
         <button
@@ -124,7 +130,7 @@ export default function CustomerSheet({
           {saving ? "Saving…" : customer ? "Save changes" : "Create customer"}
         </button>
 
-        {customer && canDelete && customer.remainingCredit <= 0 && (
+        {customer && canDelete && customer.remainingCredit <= 0 && customer.advance <= 0 && (
           <button
             type="button"
             onClick={handleDeactivate}

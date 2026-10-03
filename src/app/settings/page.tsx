@@ -2,18 +2,23 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Coins, Printer, ShieldCheck, ShieldHalf } from "lucide-react";
+import { ChevronRight, Coins, Mail, Printer, ShieldCheck, ShieldHalf, X } from "lucide-react";
 import { useAdminGate } from "@/components/AdminGate";
 import ChangePasswordCard from "@/components/ChangePasswordCard";
 import NumField from "@/components/ui/NumField";
 import { useStoreSettings, saveStoreSettings, type StoreSettings } from "@/lib/firestore/settings";
-import { setDeviceStatus } from "@/lib/firestore/devices";
+import { sendTestDeviceEmail, setDeviceStatus } from "@/lib/firestore/devices";
 import { collectDeviceDetails, getDeviceId } from "@/lib/device";
 import { printTickets, usePrinter } from "@/lib/printer";
 import { testTicket } from "@/lib/receipts";
 import { money } from "@/lib/format";
 
 const ROUND_OFF_PRESETS = [0, 10, 20, 50];
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function sameValue(a: unknown, b: unknown): boolean {
+  return Array.isArray(a) && Array.isArray(b) ? a.length === b.length && a.every((v, i) => v === b[i]) : a === b;
+}
 
 function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
@@ -78,9 +83,37 @@ export default function SettingsPage() {
   const [roundOffText, setRoundOffText] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [emailText, setEmailText] = useState("");
+  const [testing, setTesting] = useState(false);
+
+  function addEmail() {
+    const email = emailText.trim().toLowerCase();
+    if (!EMAIL_PATTERN.test(email)) {
+      setNotice({ ok: false, text: "That doesn't look like an email address." });
+      return;
+    }
+    if (!draft.deviceApprovalEmails.includes(email)) {
+      set("deviceApprovalEmails", [...draft.deviceApprovalEmails, email]);
+    }
+    setEmailText("");
+    setNotice(null);
+  }
+
+  async function handleTestEmail() {
+    setTesting(true);
+    setNotice(null);
+    try {
+      const { data } = await sendTestDeviceEmail();
+      setNotice({ ok: true, text: `Test email sent to ${data.recipients.join(", ")}.` });
+    } catch (err) {
+      setNotice({ ok: false, text: `Test email — ${(err as Error).message}` });
+    } finally {
+      setTesting(false);
+    }
+  }
 
   const draft: StoreSettings = { ...settings, ...edits };
-  const dirty = (Object.keys(edits) as (keyof StoreSettings)[]).some((k) => edits[k] !== settings[k]);
+  const dirty = (Object.keys(edits) as (keyof StoreSettings)[]).some((k) => !sameValue(edits[k], settings[k]));
   const set = <K extends keyof StoreSettings>(key: K, value: StoreSettings[K]) =>
     setEdits((e) => ({ ...e, [key]: value }));
 
@@ -243,7 +276,7 @@ export default function SettingsPage() {
           <Card icon={ShieldCheck} title="Security">
             <Row
               title="Approve every new device"
-              body="A browser that has never been used can't open the till until an admin approves it (a 6-digit code is emailed to every admin). Turning this on approves the browser you're using now."
+              body="A browser that has never been used can't open the till until an admin approves it (a 6-digit code is emailed to the addresses below). Turning this on approves the browser you're using now."
             >
               <Switch
                 label="Approve every new device"
@@ -251,6 +284,70 @@ export default function SettingsPage() {
                 onChange={(v) => set("deviceVerification", v)}
               />
             </Row>
+            <div className="px-4 py-3.5">
+              <div className="text-[15px] font-bold">Approval code emails</div>
+              <div className="mt-0.5 text-xs font-medium leading-relaxed text-muted">
+                New-device codes go to these addresses. Leave empty to send them to every admin&apos;s login email.
+              </div>
+              {draft.deviceApprovalEmails.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {draft.deviceApprovalEmails.map((email) => (
+                    <span
+                      key={email}
+                      className="flex items-center gap-1.5 rounded-full border border-border bg-ground py-1 pl-3 pr-1 text-sm font-semibold"
+                    >
+                      {email}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${email}`}
+                        onClick={() =>
+                          set(
+                            "deviceApprovalEmails",
+                            draft.deviceApprovalEmails.filter((e) => e !== email),
+                          )
+                        }
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-muted hover:bg-border"
+                      >
+                        <X size={14} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <form
+                className="mt-3 flex gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  addEmail();
+                }}
+              >
+                <input
+                  type="email"
+                  value={emailText}
+                  onChange={(e) => setEmailText(e.target.value)}
+                  placeholder="name@example.com"
+                  aria-label="Approval email address"
+                  className="h-[42px] min-w-0 flex-1 rounded-xl border border-border bg-transparent px-3 text-sm font-medium outline-none focus:border-accent"
+                />
+                <button
+                  type="submit"
+                  disabled={!emailText.trim()}
+                  className="min-h-[42px] shrink-0 rounded-xl border border-border px-4 text-sm font-bold disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </form>
+              <button
+                type="button"
+                onClick={handleTestEmail}
+                disabled={testing || dirty}
+                title={dirty ? "Save first — the test goes to the saved addresses" : undefined}
+                className="mt-3 flex min-h-[40px] items-center gap-2 rounded-xl border border-border px-4 text-sm font-bold disabled:opacity-50"
+              >
+                <Mail size={16} />
+                {testing ? "Sending…" : "Send test email"}
+              </button>
+            </div>
             <Link href="/permissions" className="flex items-center gap-3 px-4 py-3.5 hover:bg-ground">
               <ShieldHalf size={18} className="text-muted" />
               <div className="min-w-0 flex-1">

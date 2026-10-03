@@ -54,16 +54,41 @@ let transporter: nodemailer.Transporter | null = null;
 
 function getTransporter(): nodemailer.Transporter {
   if (transporter) return transporter;
+  const port = Number(process.env.SMTP_PORT ?? 465);
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT ?? 465),
-    secure: true,
+    port,
+    // 465 is TLS from the first byte; 587/25 start plain and upgrade (STARTTLS).
+    secure: port === 465,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
   });
   return transporter;
 }
 
-const MAIL_FROM = process.env.SMTP_FROM ?? '"Bakery POS" <noreply@5xcodes.com>';
+const MAIL_FROM = process.env.SMTP_FROM ?? '"VSP Farm" <noreply@5xcodes.com>';
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_RECIPIENTS = 20;
+
+/** The addresses an admin listed under Settings → Security, cleaned up. */
+async function configuredRecipients(): Promise<string[]> {
+  const raw = (await db.doc("settings/store").get()).data()?.deviceApprovalEmails;
+  if (!Array.isArray(raw)) return [];
+  const emails = raw
+    .filter((e): e is string => typeof e === "string")
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => EMAIL_PATTERN.test(e));
+  return [...new Set(emails)].slice(0, MAX_RECIPIENTS);
+}
+
+/**
+ * Who receives approval codes: the list set in Settings, or — when that list
+ * is empty — every active admin, so clearing it never leaves nobody to ask.
+ */
+async function approvalRecipients(): Promise<string[]> {
+  const configured = await configuredRecipients();
+  return configured.length > 0 ? configured : adminEmails();
+}
 
 /** Every active admin's email — the people who can let a new device in. */
 async function adminEmails(): Promise<string[]> {
@@ -90,7 +115,7 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function approvalEmailHTML(params: {
+export function approvalEmailHTML(params: {
   code: string;
   ref: string;
   userName: string;
@@ -111,7 +136,7 @@ function approvalEmailHTML(params: {
       <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 2px 12px rgba(15,22,41,0.08);">
         <tr>
           <td style="padding:24px 32px;background:#0f1629;">
-            <p style="margin:0;font-size:18px;font-weight:bold;color:#ffffff;">Bakery POS — new device sign-in</p>
+            <p style="margin:0;font-size:18px;font-weight:bold;color:#ffffff;">VSP Farm — new device sign-in</p>
             <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,0.6);">A device that has not been approved before is trying to open the till.</p>
           </td>
         </tr>
@@ -240,9 +265,12 @@ export const requestDeviceApproval = onCall<RequestDeviceApprovalData>(async (re
     return { status: "pending" as DeviceStatus, reference: reference(deviceId), mailedCount: 0 };
   }
 
-  const recipients = await adminEmails();
+  const recipients = await approvalRecipients();
   if (recipients.length === 0) {
-    await deviceRef.set({ lastMailError: "No active admin has an email address" }, { merge: true });
+    await deviceRef.set(
+      { lastMailError: "No approval email set in Settings and no active admin has an email address" },
+      { merge: true },
+    );
     return { status: "pending" as DeviceStatus, reference: reference(deviceId), mailedCount: 0 };
   }
 
@@ -250,7 +278,7 @@ export const requestDeviceApproval = onCall<RequestDeviceApprovalData>(async (re
     await getTransporter().sendMail({
       from: MAIL_FROM,
       to: recipients,
-      subject: `Bakery POS — approve new device ${reference(deviceId)} (${userName})`,
+      subject: `VSP Farm — approve new device ${reference(deviceId)} (${userName})`,
       html: approvalEmailHTML({
         code,
         ref: reference(deviceId),
@@ -405,4 +433,38 @@ export const removeDevice = onCall<{ deviceId: string }>(async (request) => {
   await db.doc(`deviceApprovals/${deviceId}`).delete();
   await db.doc(`deviceCodes/${deviceId}`).delete().catch(() => undefined);
   return { ok: true as const };
+});
+
+/**
+ * Admin-only: send a sample approval email to the current recipients, so an
+ * admin can check SMTP works without registering a real device (and without
+ * minting a code or tripping the mail cooldown).
+ */
+export const sendTestDeviceEmail = onCall(async (request) => {
+  const admin = await requireAdmin(request.auth?.uid);
+  const recipients = await approvalRecipients();
+  if (recipients.length === 0) {
+    throw new HttpsError("failed-precondition", "No approval email set and no admin has an email address");
+  }
+
+  try {
+    const info = await getTransporter().sendMail({
+      from: MAIL_FROM,
+      to: recipients,
+      subject: "VSP Farm — test new-device email",
+      html: approvalEmailHTML({
+        code: "123456",
+        ref: "TEST00",
+        userName: (admin.name as string) ?? "Admin",
+        userEmail: (admin.email as string) ?? "",
+        details: { browser: "Test email — no device is waiting", os: "—" },
+        ip: clientIp(request),
+        when: new Date().toLocaleString("en-LK", { timeZone: "Asia/Colombo" }),
+      }),
+    });
+    return { ok: true as const, recipients, messageId: info.messageId };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    throw new HttpsError("internal", `Mail failed: ${message}`);
+  }
 });

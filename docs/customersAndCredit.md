@@ -123,7 +123,7 @@ Append-only. One document per payment event, however many bills it touched.
 1. **Read everything first** — the customer doc, and that customer's bills with
    `due > 0` ordered oldest-first. (Firestore forbids a read after the first
    write in a transaction; `bills.ts:38` already carries this note.)
-2. Reject `amount <= 0` or `amount > remainingCredit`.
+2. Reject `amount <= 0`.
 3. Allocate **oldest bill first**. Each bill takes `min(remaining, bill.due)`.
 4. Anything left over goes against `openingBalance`, last.
 5. Write: each touched bill's `paid`/`due`; the customer's `remainingCredit` and
@@ -131,8 +131,24 @@ Append-only. One document per payment event, however many bills it touched.
    `increment` — the read already happened, and mixing the two invites drift);
    one `creditPayments` document.
 
-Overpayment is refused rather than parked as a negative balance. A shop that
-wants to hold an advance can wait until someone asks for it.
+### Advance (paying more than is owed)
+
+Owed 2500, paid 3000: the 2500 clears the bills as above and the 500 is kept
+on the customer as `advance` — a separate field, never a negative
+`remainingCredit`, so bill `due` values and the cached balance keep agreeing.
+The payment records the full cash taken in `amount` and the excess in
+`advance`. Searching on the Credit screen lists every customer, so an advance
+can be taken from someone who owes nothing yet.
+
+Advance is spent from the Credit screen (**Use Rs …**), not at the till:
+billing is an offline batch, and two tills reading a stale advance would spend
+it twice. Spending writes a `creditPayments` doc with `method: "advance"`; it
+moves money already received, so every cash total (Sales report, customer
+report, Credit → History) skips it.
+
+Deleting a cash payment takes its advance back off the customer, and is refused
+if that advance has since been spent — delete the "Used advance" entry first.
+Editing works the same way; a used-advance entry can only be deleted.
 
 ## UI
 

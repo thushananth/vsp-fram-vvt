@@ -27,6 +27,9 @@ export interface StoreSettings {
   paperWidth: 58 | 80;
   /** Require every new browser/device to be approved before it can be used. */
   deviceVerification: boolean;
+  /** Where new-device approval codes are emailed. Empty means every active
+   *  admin's login email. */
+  deviceApprovalEmails: string[];
 }
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
@@ -38,6 +41,7 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   // Off until an admin turns it on: with no SMTP configured and no approved
   // device yet, defaulting this on would lock a working shop out of its till.
   deviceVerification: false,
+  deviceApprovalEmails: [],
 };
 
 const STORE_DOC = "settings/store";

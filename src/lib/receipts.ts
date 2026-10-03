@@ -1,8 +1,9 @@
 "use client";
 
-import { SHOP_DETAILS } from "@/lib/constants";
+import { POWERED_BY, SHOP_DETAILS } from "@/lib/constants";
+import { lineAmount } from "@/lib/billLines";
 import { Ticket, columnsFor } from "@/lib/printer";
-import type { Bill, BillLine, Category, Product } from "@/lib/types";
+import type { Bill, Category, Product } from "@/lib/types";
 
 /** "1 375.00" — two decimals, no currency, the way the old receipts read. */
 function amt(n: number): string {
@@ -43,18 +44,42 @@ function letterhead(t: Ticket) {
   t.feed(1).align("left");
 }
 
-function lineCells(l: BillLine, unit: string, wide: boolean) {
-  const name = wide ? `${l.name} (${Math.round(l.price)})` : l.name;
-  return [name, `${qty(l.qty)} ${unit}`, amt(l.price * l.qty)];
+/** The maker's credit under the thank-you line, small and centred. */
+function poweredBy(t: Ticket) {
+  t.feed(1).align("center");
+  const one = `Powered by ${POWERED_BY.name} | ${POWERED_BY.phone}`;
+  if (one.length <= t.cols) t.line(one);
+  else t.line(`Powered by ${POWERED_BY.name}`).line(POWERED_BY.phone);
+  return t.align("left");
+}
+
+/** Split a name across as many lines as it needs, breaking between words. */
+function wrap(text: string, cols: number): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (!cur) cur = word;
+    else if (cur.length + 1 + word.length <= cols) cur += ` ${word}`;
+    else {
+      out.push(cur);
+      cur = word;
+    }
+    while (cur.length > cols) {
+      out.push(cur.slice(0, cols));
+      cur = cur.slice(cols);
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
 }
 
 /** The customer's receipt. */
 export function customerReceipt(bill: Bill, ctx: ReceiptContext): Ticket {
   const cols = columnsFor(ctx.paperWidth);
-  const wide = cols >= 48;
   const t = new Ticket(cols);
-  // Item | Qty | Total — the first column takes whatever the others leave.
-  const widths = wide ? [cols - 12 - 12 - 2, -12, -12] : [cols - 9 - 10 - 2, -9, -10];
+  // Two rows a line: the full item name, then Price | Qty | Total under it, so
+  // a long name never squeezes the numbers.
+  const widths = cols >= 48 ? [-15, -15, -16] : [-10, -10, -10];
 
   billNumber(t, bill, ctx.reprint);
   letterhead(t);
@@ -63,9 +88,14 @@ export function customerReceipt(bill: Bill, ctx: ReceiptContext): Ticket {
   t.line(`Date: ${stamp(bill.createdAt)}`);
   if (ctx.cashierName) t.line(`Cashier: ${ctx.cashierName}`);
   t.rule();
-  t.bold(true).columns(["Item", "Qty", "Total"], widths).bold(false);
+  t.bold(true).line("Item").columns(["Price", "Qty", "Total"], widths).bold(false);
   t.rule();
-  for (const l of bill.lines) t.columns(lineCells(l, ctx.unitOf(l.productId), wide), widths);
+  for (const l of bill.lines) {
+    t.bold(true);
+    for (const row of wrap(l.name, cols)) t.line(row);
+    t.bold(false);
+    t.columns([amt(l.price), `${qty(l.qty)} ${ctx.unitOf(l.productId)}`.trim(), amt(lineAmount(l))], widths);
+  }
   t.rule();
 
   if (bill.discount > 0) {
@@ -89,6 +119,7 @@ export function customerReceipt(bill: Bill, ctx: ReceiptContext): Ticket {
 
   t.rule();
   t.align("center").line("Thank you for shopping with us").align("left");
+  poweredBy(t);
   return t.cut();
 }
 
@@ -110,7 +141,7 @@ export function counterCopy(bill: Bill, ctx: ReceiptContext): Ticket {
   t.rule();
   t.size(1, 2);
   for (const l of bill.lines) {
-    t.columns([l.name, qty(l.qty), ctx.unitOf(l.productId), amt(l.price * l.qty)], widths);
+    t.columns([l.name, qty(l.qty), ctx.unitOf(l.productId), amt(lineAmount(l))], widths);
   }
   t.size(1, 1);
   t.rule();
@@ -144,6 +175,10 @@ export function paymentReceipt(params: {
   customerName: string;
   amount: number;
   balanceBefore: number;
+  /** Paid beyond what was owed and kept for the customer. */
+  advance?: number;
+  /** Their whole advance after this payment. */
+  advanceHeld?: number;
   /** Defaults to now — a slip is printed the moment the money is taken. */
   createdAt?: number;
 }): Ticket {
@@ -155,9 +190,12 @@ export function paymentReceipt(params: {
   t.rule();
   t.pair("Balance before", amt(params.balanceBefore));
   t.bold(true).size(1, 2).pair("PAYMENT", amt(params.amount)).size(1, 1).bold(false);
-  t.pair("Balance now", amt(Math.max(0, params.balanceBefore - params.amount)));
+  t.pair("Balance now", amt(Math.max(0, params.balanceBefore - (params.amount - (params.advance ?? 0)))));
+  if (params.advance && params.advance > 0) t.pair("Kept as advance", amt(params.advance));
+  if (params.advanceHeld && params.advanceHeld > 0) t.bold(true).pair("Advance held", amt(params.advanceHeld)).bold(false);
   t.rule();
   t.align("center").line("Thank you for your payment").align("left");
+  poweredBy(t);
   return t.cut();
 }
 

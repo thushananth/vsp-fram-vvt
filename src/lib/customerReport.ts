@@ -1,4 +1,5 @@
-import { SHOP_DETAILS } from "@/lib/constants";
+import { POWERED_BY_LINE, SHOP_DETAILS } from "@/lib/constants";
+import { lineAmount } from "@/lib/billLines";
 import { localDateKey } from "@/lib/format";
 import type { Bill, CreditPayment, Customer } from "@/lib/types";
 
@@ -78,7 +79,8 @@ export function buildCustomerReport(params: {
   }
 
   for (const p of payments) {
-    if (!p.customerId || p.createdAt < startMs || p.createdAt >= endMs) continue;
+    // A used-advance entry moves money already received; it isn't cash in.
+    if (!p.customerId || p.method === "advance" || p.createdAt < startMs || p.createdAt >= endMs) continue;
     const row = rowFor(p.customerId, p.customerName);
     row.payments.push(p);
     row.received += p.amount;
@@ -168,7 +170,7 @@ export function billLineRows(bills: Bill[], customerName: string, ctx: ReportCon
       // Only an overridden line carries listPrice — anything else sold at list.
       discount: l.listPrice !== undefined ? Math.max(0, (l.listPrice - l.price) * l.qty) : 0,
       qty: l.qty,
-      price: l.price * l.qty,
+      price: lineAmount(l),
       payment: b.paymentType === "credit" ? "CREDIT" : "CASH",
       status: b.status === "void" ? "DELETED" : "NEW",
       user: ctx.userName?.(b.cashierId) ?? "",
@@ -295,6 +297,10 @@ export function customerReportHtml(
   ${billsByDaySection("Cash Bills", row.bills.filter((b) => b.paymentType !== "credit"), row.name, ctx)}
   ${billsByDaySection("Deleted Bills", row.voidBills, row.name, ctx)}
 
+  <footer style="margin-top:28px;text-align:center;font-size:11px;color:#b45309;font-weight:700;">
+    ${esc(POWERED_BY_LINE)}
+  </footer>
+
   <script>window.onload = () => { window.focus(); window.print(); };</script>
 </body></html>`;
 }
@@ -325,144 +331,124 @@ function fileStamp(ms: number): string {
 }
 
 /**
- * The same statement as customerReportHtml, saved straight to a .pdf file —
- * no print dialog. jsPDF is loaded on demand so it never weighs on Billing.
+ * One customer's statement as a .pdf, in the same branded look as the Sales
+ * report: ink letterhead, headline cards, amber-ticked sections, and the
+ * maker's credit in the footer. jsPDF is loaded on demand so it never weighs
+ * on Billing.
  */
 export async function downloadCustomerReportPdf(
   row: CustomerReportRow,
   range: { from: string; to: string },
   ctx: ReportContext = {},
 ): Promise<void> {
-  const [{ jsPDF }, { default: autoTable }] = await Promise.all([
-    import("jspdf"),
-    import("jspdf-autotable"),
-  ]);
-
+  const [{ loadPdf, footers, letterhead, pdfAmount, pdfDateTime, BRAND }, { kpis, section, table }] =
+    await Promise.all([import("@/lib/pdf/brand"), import("@/lib/pdf/salesReportPdf")]);
+  const { jsPDF, autoTable } = await loadPdf();
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
-  const margin = 16;
-  let y = margin + 4;
+  const label = range.from === range.to ? range.from : `${range.from} to ${range.to}`;
+  const c = { doc, autoTable, m: 14, y: 0 };
+  c.y = letterhead(doc, "Customer statement", label);
+  const rs = (n: number) => `Rs ${pdfAmount(n)}`;
+  const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-  // Moves to a new page when `needed` mm won't fit on this one.
-  const ensure = (needed: number) => {
-    if (y + needed > pageH - margin) {
-      doc.addPage();
-      y = margin;
-    }
-  };
-  const heading = (text: string, size = 13) => {
-    ensure(14);
-    doc.setFont("helvetica", "bold").setFontSize(size).text(text, margin, y);
-    y += 4;
-  };
-  const rule = () => {
-    ensure(10);
-    y += 4;
-    doc.setLineWidth(0.6).line(margin, y, pageW - margin, y);
-    y += 9;
-  };
-  const table = (head: string[], body: (string | number)[][], rightCols: number[] = []) => {
-    autoTable(doc, {
-      startY: y,
-      head: [head],
-      body,
-      theme: "grid",
-      margin: { left: margin, right: margin },
-      tableWidth: "wrap",
-      styles: { font: "helvetica", fontSize: 10, textColor: 0, lineColor: 0, lineWidth: 0.35, cellPadding: 2 },
-      headStyles: { fillColor: [255, 255, 255], textColor: 0, fontStyle: "bold" },
-      columnStyles: Object.fromEntries(rightCols.map((c) => [c, { halign: "right" as const }])),
-    });
-    y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 4;
-  };
+  // Who the statement is for.
+  doc.setFont("helvetica", "bold").setFontSize(7).setTextColor(...BRAND.muted).text("CUSTOMER", c.m, c.y);
+  doc.setFont("helvetica", "bold").setFontSize(14).setTextColor(...BRAND.ink).text(row.name, c.m, (c.y += 6));
+  if (row.mobileNumber) {
+    doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(...BRAND.muted).text(row.mobileNumber, c.m, (c.y += 5));
+  }
+  c.y += 6;
 
-  // Letterhead
-  doc.setFont("helvetica", "bold").setFontSize(16).text(SHOP_DETAILS.name, pageW / 2, y, { align: "center" });
-  doc.setFont("helvetica", "normal").setFontSize(12);
-  doc.text(SHOP_DETAILS.address, pageW / 2, (y += 6), { align: "center" });
-  doc.text(SHOP_DETAILS.phone, pageW / 2, (y += 6), { align: "center" });
-  y += 12;
-
-  doc.setFont("helvetica", "bold").setFontSize(13).text(`Sales Report - ${row.name}`, margin, y);
-  doc.setFont("helvetica", "normal").setFontSize(12).text(`Date: ${range.from} --> ${range.to}`, margin, (y += 6));
-  y += 12;
-
-  heading("Summary");
-  table(["Total", "Cash", "Credit", "Deleted"], [
-    [amount(row.total), amount(row.cash), amount(row.credit), amount(row.deleted)],
+  kpis(c, [
+    { label: "Total sales", value: rs(row.total), accent: true },
+    { label: "Cash sales", value: rs(row.cash) },
+    { label: "Credit sales", value: rs(row.credit) },
+    { label: "Received", value: rs(row.received) },
+  ]);
+  kpis(c, [
+    { label: "Outstanding now", value: rs(row.outstanding) },
+    { label: "Bills", value: String(row.bills.length) },
+    { label: `Deleted (${row.voidBills.length})`, value: rs(row.deleted) },
   ]);
 
-  rule();
-  heading("Received Cash from Debtors");
-  if (row.payments.length) {
-    table(
-      ["Date", "Customer", "Amount"],
-      row.payments.map((p) => [
-        localDateKey(p.createdAt),
-        row.name.length > 22 ? `${row.name.slice(0, 20)}...` : row.name,
-        amount(p.amount),
-      ]),
-      [2],
-    );
-  } else {
-    doc.setFont("helvetica", "normal").setFontSize(10).text("No payments received in this period.", margin, (y += 2));
-    y += 4;
-  }
+  section(c, "Received cash", count(row.payments.length, "payment"));
+  table(
+    c,
+    ["Date", "Applied to", "Amount"],
+    row.payments.map((p) => [
+      pdfDateTime(p.createdAt),
+      p.allocations.map((a) => (a.billNo ? `#${a.billNo}` : "Opening")).join(", ") +
+        (p.advance > 0 ? ` · ${pdfAmount(p.advance)} kept as advance` : ""),
+      pdfAmount(p.amount),
+    ]),
+    { right: [2], foot: ["Total", "", pdfAmount(row.received)] },
+  );
 
-  const section = (title: string, bills: Bill[]) => {
+  // Bills, a day at a time: the date on the day's first line, a subtotal row
+  // after its last.
+  const billSection = (title: string, bills: Bill[]) => {
     if (bills.length === 0) return;
-    rule();
-    heading(title);
+    const total = bills.reduce((t, b) => t + b.total, 0);
+    section(c, title, `${count(bills.length, "bill")} · ${rs(total)}`);
+    const body: string[][] = [];
+    const subtotalRows = new Set<number>();
     for (const [day, dayBills] of groupBillsByDay(bills)) {
-      ensure(26);
-      doc.setFont("helvetica", "normal").setFontSize(12).text(`Date: ${day}`, margin, (y += 3));
-      y += 3;
-      const rows = billLineRows(dayBills, row.name, ctx);
-      autoTable(doc, {
-        startY: y,
-        head: [[...BILL_COLUMNS]],
-        body: rows.map((r) => [
-          r.date,
-          r.time,
-          r.customer,
-          r.refNo,
-          r.item,
+      billLineRows(dayBills, row.name, ctx).forEach((r, i) => {
+        body.push([
+          i === 0 ? day : "",
+          r.time.slice(0, 5),
+          `#${r.refNo}`,
           r.subItem,
-          amount(r.discount),
+          r.item,
           qtyText(r.qty),
-          amount(r.price),
-          r.payment,
-          r.status,
+          r.discount > 0 ? pdfAmount(r.discount) : "-",
+          pdfAmount(r.price),
           r.user,
-        ]),
-        theme: "grid",
-        margin: { left: margin, right: margin },
-        styles: { font: "helvetica", fontSize: 7, textColor: 0, lineColor: 0, lineWidth: 0.35, cellPadding: 1.4 },
-        headStyles: { fillColor: [255, 255, 255], textColor: 0, fontStyle: "bold" },
-        columnStyles: { 6: { halign: "right" }, 7: { halign: "right" }, 8: { halign: "right" } },
-        // CREDIT in red, as on the shop's statements.
-        didParseCell: (data) => {
-          if (data.section === "body" && data.column.index === 9 && data.cell.raw === "CREDIT") {
-            data.cell.styles.textColor = [209, 17, 17];
-          }
-        },
+        ]);
       });
-      y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
-      ensure(10);
-      doc
-        .setFont("helvetica", "bold")
-        .setFontSize(13)
-        .text(`Total = ${amount(dayBills.reduce((t, b) => t + b.total, 0))}`, pageW / 2, (y += 6), {
-          align: "center",
-        });
-      y += 8;
+      subtotalRows.add(body.length);
+      body.push(["", "", "", "Day total", "", "", "", pdfAmount(dayBills.reduce((t, b) => t + b.total, 0)), ""]);
     }
+    autoTable(doc, {
+      startY: c.y,
+      margin: { left: c.m, right: c.m, top: 16, bottom: 18 },
+      head: [["Date", "Time", "Bill", "Product", "Category", "Qty", "Discount", "Amount", "User"]],
+      body,
+      foot: [["Total", "", "", "", "", "", "", pdfAmount(total), ""]],
+      showFoot: "lastPage",
+      theme: "plain",
+      styles: {
+        font: "helvetica",
+        fontSize: 8,
+        textColor: BRAND.ink,
+        cellPadding: { top: 2, bottom: 2, left: 2.2, right: 2.2 },
+      },
+      headStyles: { fillColor: BRAND.amberSoft, textColor: [120, 53, 15], fontStyle: "bold", fontSize: 7.5 },
+      footStyles: { fillColor: BRAND.ink, textColor: [255, 255, 255], fontStyle: "bold" },
+      alternateRowStyles: { fillColor: BRAND.zebra },
+      columnStyles: {
+        0: { cellWidth: 21 },
+        1: { cellWidth: 12 },
+        2: { cellWidth: 14 },
+        5: { halign: "right", cellWidth: 14 },
+        6: { halign: "right", cellWidth: 18 },
+        7: { halign: "right", cellWidth: 22 },
+      },
+      didParseCell: (data) => {
+        if (data.section !== "body" && [5, 6, 7].includes(data.column.index)) data.cell.styles.halign = "right";
+        if (data.section === "body" && subtotalRows.has(data.row.index)) {
+          data.cell.styles.fontStyle = "bold";
+          data.cell.styles.fillColor = [241, 245, 249];
+        }
+      },
+    });
+    c.y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
   };
-  section("Credit Bills", row.bills.filter((b) => b.paymentType === "credit"));
-  section("Cash Bills", row.bills.filter((b) => b.paymentType !== "credit"));
-  section("Deleted Bills", row.voidBills);
+  billSection("Credit bills", row.bills.filter((b) => b.paymentType === "credit"));
+  billSection("Cash bills", row.bills.filter((b) => b.paymentType !== "credit"));
+  billSection("Deleted bills", row.voidBills);
 
+  footers(doc, `${SHOP_DETAILS.name} · Customer statement · ${row.name}`);
   const safeName = row.name.replace(/[\\/:*?"<>|]/g, "").trim() || "Customer";
   doc.save(`VSP_Customer_Report_${safeName}_${fileStamp(Date.now())}.pdf`);
 }

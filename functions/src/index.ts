@@ -2,7 +2,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getAuth } from "firebase-admin/auth";
 import { db } from "./db";
 
-export { requestDeviceApproval, verifyDeviceCode, setDeviceStatus, removeDevice } from "./devices";
+export { requestDeviceApproval, verifyDeviceCode, setDeviceStatus, removeDevice, sendTestDeviceEmail } from "./devices";
 
 interface CreateUserData {
   email: string;

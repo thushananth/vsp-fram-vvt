@@ -150,3 +150,8 @@ export const removeDevice = httpsCallable<{ deviceId: string }, { ok: true }>(
   functions,
   "removeDevice",
 );
+
+export const sendTestDeviceEmail = httpsCallable<
+  void,
+  { ok: true; recipients: string[]; messageId: string }
+>(functions, "sendTestDeviceEmail");

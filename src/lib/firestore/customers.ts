@@ -13,6 +13,7 @@ function toCustomer(id: string, data: Record<string, unknown>): Customer {
     mobileNumber: (data.mobileNumber as string) ?? "",
     remainingCredit: (data.remainingCredit as number) ?? 0,
     openingBalance: (data.openingBalance as number) ?? 0,
+    advance: (data.advance as number) ?? 0,
     active: data.active !== false,
     createdAt: (data.createdAt as number) ?? 0,
     updatedAt: (data.updatedAt as number) ?? 0,

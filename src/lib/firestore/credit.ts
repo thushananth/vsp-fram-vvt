@@ -87,10 +87,31 @@ function millis(value: unknown): number {
   return (value as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
 }
 
+/** "#12, #14 · 500.00 kept as advance" — what a payment did, in one line. */
+export function describePayment(
+  p: Pick<CreditPayment, "method" | "allocations" | "advance" | "imported">,
+): string {
+  const bills = p.allocations.map((a) => (a.billNo ? `#${a.billNo}` : "Opening")).join(", ");
+  if (p.imported) return "Old app";
+  const parts = [p.method === "advance" ? `Used advance${bills ? ` on ${bills}` : ""}` : bills];
+  if (p.advance > 0) parts.push(`Rs ${p.advance.toLocaleString("en-LK")} kept as advance`);
+  return parts.filter(Boolean).join(" · ");
+}
+
+/** Cash that actually came in — an "advance" payment only moves held money. */
+export function isCashPayment(p: Pick<CreditPayment, "method">): boolean {
+  return p.method !== "advance";
+}
+
 /**
  * Take a payment off a customer's balance, oldest bill first, opening balance
  * last. One transaction: the bills, the customer's cached balance and the
  * payment record either all land or none do.
+ *
+ * Paying more than is owed is allowed: the excess is kept on the customer as
+ * `advance` (owed 2500, paid 3000 → 500 held) and recorded on the payment.
+ * With `source: "advance"` no cash is taken — held advance is spent on what
+ * is owed instead.
  *
  * The web SDK can't run a query inside a transaction, so the candidate bills
  * are listed first and then re-read by reference inside it — a bill that was
@@ -105,8 +126,10 @@ export async function payCredit(params: {
   amount: number;
   receivedBy: string;
   note: string | null;
-}): Promise<{ id: string; allocations: CreditAllocation[] }> {
-  const { customerId, amount, receivedBy, note } = params;
+  source?: "cash" | "advance";
+}): Promise<{ id: string; allocations: CreditAllocation[]; advance: number }> {
+  const { customerId, receivedBy, note, source = "cash" } = params;
+  const amount = round2(params.amount);
   if (!(amount > 0)) throw new Error("Enter an amount greater than zero");
 
   const candidates = await requireServer(
@@ -160,13 +183,17 @@ export async function payCredit(params: {
       });
 
       const owed = round2(lines.reduce((sum, l) => sum + l.due, 0));
-      if (owed <= 0) throw new Error("This customer owes nothing");
-      if (round2(amount) > owed) {
-        throw new Error(`Payment cannot exceed the ${owed.toFixed(2)} outstanding`);
+      const held = round2((customer.advance as number) ?? 0);
+      if (source === "advance") {
+        if (owed <= 0) throw new Error("This customer owes nothing");
+        if (amount > held + 0.001) throw new Error(`Only ${held.toFixed(2)} is held as advance`);
       }
 
-      const allocations = allocate(amount, lines);
+      const allocations = allocate(Math.min(amount, owed), lines);
       const applied = round2(allocations.reduce((sum, a) => sum + a.amount, 0));
+      // Spending advance only ever uses what is owed; cash beyond it is kept.
+      const extra = source === "cash" ? round2(amount - applied) : 0;
+      const advanceAfter = source === "cash" ? round2(held + extra) : Math.max(0, round2(held - applied));
 
       for (const allocation of allocations) {
         if (!allocation.billId) continue;
@@ -192,6 +219,7 @@ export async function payCredit(params: {
             round2(((customer.remainingCredit as number) ?? 0) - applied),
           ),
           openingBalance: Math.max(0, round2(openingBalance - openingPaid)),
+          advance: advanceAfter,
           updatedAt: Date.now(),
         },
         { merge: true },
@@ -201,15 +229,17 @@ export async function payCredit(params: {
       tx.set(paymentRef, {
         customerId,
         customerName,
-        amount: applied,
-        method: "cash",
+        // The cash handed over, in full — or, spending advance, what it cleared.
+        amount: source === "cash" ? amount : applied,
+        method: source,
         allocations,
+        advance: extra,
         receivedBy,
         createdAt: Date.now(),
         note,
       });
 
-      return { id: paymentRef.id, allocations };
+      return { id: paymentRef.id, allocations, advance: extra };
     }),
     // Deliberately not "try again": the transaction can't be cancelled, so a
     // payment that times out here may still land. Retrying it blind would
@@ -264,7 +294,25 @@ async function readReversal(tx: Transaction, payment: CreditPayment) {
   const givenBack = round2(reversedBills.reduce((sum, b) => sum + b.amount, 0) + openingPaid);
   const reversedRemainingCredit = round2(((customer.remainingCredit as number) ?? 0) + givenBack);
 
-  return { customerRef, customer, reversedBills, reversedOpeningBalance, reversedRemainingCredit };
+  // Advance moves the other way: a cash payment takes back what it put aside,
+  // and an advance payment returns what it spent.
+  const held = round2((customer.advance as number) ?? 0);
+  const reversedAdvance =
+    payment.method === "advance" ? round2(held + givenBack) : round2(held - payment.advance);
+  if (reversedAdvance < -0.004) {
+    throw new Error(
+      `${payment.advance.toFixed(2)} of this payment was kept as advance and some of it has since been used. Undo the "Used advance" entry first.`,
+    );
+  }
+
+  return {
+    customerRef,
+    customer,
+    reversedBills,
+    reversedOpeningBalance,
+    reversedRemainingCredit,
+    reversedAdvance: Math.max(0, reversedAdvance),
+  };
 }
 
 /** Remove a credit payment entirely — the money goes back on the bills/balance it was taken off. */
@@ -276,7 +324,7 @@ export async function deleteCreditPayment(paymentId: string) {
       if (!paymentSnap.exists()) throw new Error("Payment not found");
       const payment = toPayment(paymentSnap.id, paymentSnap.data());
 
-      const { customerRef, reversedBills, reversedOpeningBalance, reversedRemainingCredit } =
+      const { customerRef, reversedBills, reversedOpeningBalance, reversedRemainingCredit, reversedAdvance } =
         await readReversal(tx, payment);
 
       for (const bill of reversedBills) {
@@ -285,7 +333,12 @@ export async function deleteCreditPayment(paymentId: string) {
       }
       tx.set(
         customerRef,
-        { remainingCredit: reversedRemainingCredit, openingBalance: reversedOpeningBalance, updatedAt: Date.now() },
+        {
+          remainingCredit: reversedRemainingCredit,
+          openingBalance: reversedOpeningBalance,
+          advance: reversedAdvance,
+          updatedAt: Date.now(),
+        },
         { merge: true },
       );
       tx.delete(paymentRef);
@@ -301,7 +354,8 @@ export async function deleteCreditPayment(paymentId: string) {
  * other payments landed on this customer since the original one.
  */
 export async function editCreditPayment(paymentId: string, params: { amount: number; note: string | null }) {
-  const { amount, note } = params;
+  const { note } = params;
+  const amount = round2(params.amount);
   if (!(amount > 0)) throw new Error("Enter an amount greater than zero");
 
   return requireServer(
@@ -310,6 +364,12 @@ export async function editCreditPayment(paymentId: string, params: { amount: num
       const paymentSnap = await getDoc(paymentRef);
       if (!paymentSnap.exists()) throw new Error("Payment not found");
       const payment = toPayment(paymentSnap.id, paymentSnap.data());
+      if (payment.imported) {
+        throw new Error("Payments imported from the old app are history only and can't be edited.");
+      }
+      if (payment.method === "advance") {
+        throw new Error("A used-advance entry can't be edited — delete it and use the advance again.");
+      }
 
       // Every other outstanding bill for this customer, read outside the
       // transaction like payCredit does — the web SDK can't query inside one.
@@ -319,7 +379,7 @@ export async function editCreditPayment(paymentId: string, params: { amount: num
         .filter((id) => !payment.allocations.some((a) => a.billId === id));
 
       return runTransaction(db, async (tx) => {
-        const { customerRef, reversedBills, reversedOpeningBalance, reversedRemainingCredit } =
+        const { customerRef, reversedBills, reversedOpeningBalance, reversedRemainingCredit, reversedAdvance } =
           await readReversal(tx, payment);
 
         // Other bills that weren't part of the original allocation might
@@ -353,12 +413,10 @@ export async function editCreditPayment(paymentId: string, params: { amount: num
         });
 
         const owed = round2(lines.reduce((sum, l) => sum + l.due, 0));
-        if (owed <= 0) throw new Error("This customer owes nothing to allocate against");
-        if (round2(amount) > owed) {
-          throw new Error(`Payment cannot exceed the ${owed.toFixed(2)} outstanding`);
-        }
-
-        const newAllocations = allocate(amount, lines);
+        const newAllocations = allocate(Math.min(amount, owed), lines);
+        const applied = round2(newAllocations.reduce((sum, a) => sum + a.amount, 0));
+        // Anything beyond what is owed is kept as advance, as on a new payment.
+        const extra = round2(amount - applied);
 
         // Written unconditionally, even at taken=0 — every bill here was
         // either reversed or is a fresh candidate, so its due/paid may differ
@@ -376,14 +434,19 @@ export async function editCreditPayment(paymentId: string, params: { amount: num
         tx.set(
           customerRef,
           {
-            remainingCredit: Math.max(0, round2(reversedRemainingCredit - amount)),
+            remainingCredit: Math.max(0, round2(reversedRemainingCredit - applied)),
             openingBalance: Math.max(0, round2(reversedOpeningBalance - newOpeningPaid)),
+            advance: round2(reversedAdvance + extra),
             updatedAt: Date.now(),
           },
           { merge: true },
         );
 
-        tx.set(paymentRef, { amount: round2(amount), note, allocations: newAllocations, editedAt: Date.now() }, { merge: true });
+        tx.set(
+          paymentRef,
+          { amount, note, allocations: newAllocations, advance: extra, editedAt: Date.now() },
+          { merge: true },
+        );
 
         return { allocations: newAllocations };
       });
@@ -398,8 +461,10 @@ function toPayment(id: string, data: Record<string, unknown>): CreditPayment {
     customerId: (data.customerId as string) ?? "",
     customerName: (data.customerName as string) ?? "",
     amount: (data.amount as number) ?? 0,
-    method: "cash",
+    method: data.method === "advance" ? "advance" : "cash",
     allocations: (data.allocations ?? []) as CreditAllocation[],
+    advance: (data.advance as number) ?? 0,
+    imported: data.imported === true,
     receivedBy: (data.receivedBy as string) ?? "",
     createdAt: (data.createdAt as number) ?? 0,
     note: (data.note as string) ?? null,

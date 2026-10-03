@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { lineAmount } from "@/lib/billLines";
 import { useAdminGate } from "@/components/AdminGate";
 import { Search, TriangleAlert } from "lucide-react";
 import { useBills } from "@/lib/firestore/bills";
@@ -77,7 +78,7 @@ export default function ProfitPage() {
         const isEstimate = stamped === undefined;
         if (isEstimate) estimatedLines += 1;
 
-        const lineRevenue = lineItem.price * lineItem.qty;
+        const lineRevenue = lineAmount(lineItem);
         const lineCost = unitCost * lineItem.qty;
         revenue += lineRevenue;
         cost += lineCost;
