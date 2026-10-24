@@ -103,6 +103,10 @@ export function customerReceipt(bill: Bill, ctx: ReceiptContext): Ticket {
     t.pair("Round-off", `-${amt(bill.discount)}`);
   }
   t.bold(true).size(1, 2).pair("TOTAL", amt(bill.total)).size(1, 1).bold(false);
+  if (bill.advanceUsed > 0) {
+    t.pair("Advance used", `-${amt(bill.advanceUsed)}`);
+    t.bold(true).pair("To pay", amt(bill.total - bill.advanceUsed)).bold(false);
+  }
   t.feed(1);
 
   if (bill.paymentType === "credit") {

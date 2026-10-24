@@ -45,7 +45,6 @@ interface ProductProfit {
 export default function ProfitPage() {
   const gate = useAdminGate("Profit", "It shows what the shop pays for stock, so it stays off the till.");
   const today = todayKey();
-  const { bills, loading } = useBills();
   const { products } = useProducts();
 
   const [rangeMode, setRangeMode] = useState<RangeMode>("today");
@@ -57,6 +56,7 @@ export default function ProfitPage() {
     () => resolveRange(rangeMode, { from: customFrom, to: customTo }),
     [rangeMode, customFrom, customTo],
   );
+  const { bills, loading } = useBills(range);
 
   const productsById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
 

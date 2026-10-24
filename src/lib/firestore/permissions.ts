@@ -123,14 +123,25 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
 
 const PERMISSIONS_DOC = "settings/cashierPermissions";
 
+/**
+ * The last permissions any screen received. Every page opens its own listener,
+ * and without this each one started out "loading" — so moving from Bills to
+ * Reports could put a loading screen up while the new listener caught up.
+ * Cleared on sign-out.
+ */
+let lastPermissions: CashierPermissions | null = null;
+
 export function usePermissions(): { permissions: CashierPermissions; loading: boolean } {
-  const [permissions, setPermissions] = useState<CashierPermissions>(DEFAULT_PERMISSIONS);
-  const [loading, setLoading] = useState(true);
+  const [permissions, setPermissions] = useState<CashierPermissions>(
+    () => lastPermissions ?? DEFAULT_PERMISSIONS,
+  );
+  const [loading, setLoading] = useState(() => lastPermissions === null);
 
   useEffect(() => {
     let unsubSnapshot: (() => void) | null = null;
     const unsubAuth = onAuthStateChanged(auth, (u) => {
       if (!u) {
+        lastPermissions = null;
         setPermissions(DEFAULT_PERMISSIONS);
         setLoading(false);
         if (unsubSnapshot) {
@@ -142,7 +153,8 @@ export function usePermissions(): { permissions: CashierPermissions; loading: bo
       unsubSnapshot = onSnapshot(
         doc(db, PERMISSIONS_DOC),
         (snap) => {
-          setPermissions({ ...DEFAULT_PERMISSIONS, ...(snap.data() as Partial<CashierPermissions> | undefined) });
+          lastPermissions = { ...DEFAULT_PERMISSIONS, ...(snap.data() as Partial<CashierPermissions> | undefined) };
+          setPermissions(lastPermissions);
           setLoading(false);
         },
         () => setLoading(false),

@@ -140,9 +140,17 @@ The payment records the full cash taken in `amount` and the excess in
 `advance`. Searching on the Credit screen lists every customer, so an advance
 can be taken from someone who owes nothing yet.
 
-Advance is spent from the Credit screen (**Use Rs …**), not at the till:
-billing is an offline batch, and two tills reading a stale advance would spend
-it twice. Spending writes a `creditPayments` doc with `method: "advance"`; it
+Advance is spent at the till automatically: picking a customer who holds
+advance takes it off the bill (2000 bill, 1000 held → pay 1000), with a popup
+before the sale and an "Advance used" line on the receipt, PDF and bill. The
+cashier can switch it off for that bill. The bill stores `advanceUsed`
+separately from `paid` — `paid` stays cash only, so cash reports don't count
+the advance twice — and `due = total - advanceUsed - paid`. The customer's
+`advance` drops by `increment(-advanceUsed)` in the same offline batch, and
+voiding the bill gives it back. Known gap: two tills offline at once (or a till
+and the Credit screen) can spend the same advance, taking it below zero.
+
+Advance can also still be spent from the Credit screen (**Use Rs …**). Spending writes a `creditPayments` doc with `method: "advance"`; it
 moves money already received, so every cash total (Sales report, customer
 report, Credit → History) skips it.
 

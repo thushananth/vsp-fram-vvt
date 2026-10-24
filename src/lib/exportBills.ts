@@ -80,7 +80,7 @@ export function journalToExportable(entry: JournalEntry): ExportableBill {
     // Taken from the entry, never re-derived from paymentType: a bill part-paid
     // at the till would otherwise export as owing its whole total.
     paid: entry.paid,
-    due: Math.round((entry.total - entry.paid) * 100) / 100,
+    due: Math.round((entry.total - (entry.advanceUsed ?? 0) - entry.paid) * 100) / 100,
     tender: entry.tender,
     change: entry.change,
     cashierId: entry.cashierId,

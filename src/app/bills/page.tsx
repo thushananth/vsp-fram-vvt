@@ -41,7 +41,6 @@ const PAGE_SIZES = [25, 50, 100] as const;
 
 export default function BillsPage() {
   const today = todayKey();
-  const { bills, loading } = useBills();
   const { profile } = useAuth();
   const { permissions } = usePermissions();
   const { products } = useProducts({ includeInactive: true });
@@ -78,6 +77,7 @@ export default function BillsPage() {
     () => resolveRange(rangeMode, { from: customFrom, to: customTo }),
     [rangeMode, customFrom, customTo],
   );
+  const { bills, loading } = useBills(range);
 
   const inRange = useMemo(
     () => bills.filter((b) => b.createdAt >= range.startMs && b.createdAt < range.endMs),
@@ -190,6 +190,7 @@ export default function BillsPage() {
       unitOf,
       cashierName: cashierName(bill.cashierId),
       customerMobile: customers.find((c) => c.id === bill.customerId)?.mobileNumber || undefined,
+      customerCredit: customers.find((c) => c.id === bill.customerId)?.remainingCredit,
     });
   }
 
@@ -646,6 +647,12 @@ function BillDetail({
         <div className="text-xs font-bold uppercase tracking-wider text-muted">Total</div>
         <div className="tabular-nums text-2xl font-extrabold">{money(bill.total)}</div>
       </div>
+      {bill.advanceUsed > 0 && (
+        <div className="tabular-nums flex justify-between pt-1 text-xs font-bold text-success">
+          <span>Advance used · to pay {money(bill.total - bill.advanceUsed)}</span>
+          <span>−{money(bill.advanceUsed)}</span>
+        </div>
+      )}
       {bill.paymentType === "credit" ? (
         <div className="tabular-nums text-right text-xs font-bold text-warning">
           On credit · Paid {money(bill.paid)} ·{" "}

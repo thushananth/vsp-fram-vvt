@@ -34,8 +34,6 @@ const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [
 export default function CustomerReportPage() {
   const gate = usePermissionGate("customerReports", "Customer reports", "An admin can turn on “Customer reports” for cashiers under Permissions.");
   const today = todayKey();
-  const { bills, loading: billsLoading } = useBills();
-  const { payments, loading: paymentsLoading } = useCreditPayments();
   const { customers, loading: customersLoading } = useCustomers();
   const { products } = useProducts();
   const { users } = useUsers();
@@ -58,6 +56,8 @@ export default function CustomerReportPage() {
     () => resolveRange(rangeMode, { from: customFrom, to: customTo }),
     [rangeMode, customFrom, customTo],
   );
+  const { bills, loading: billsLoading } = useBills(range);
+  const { payments, loading: paymentsLoading } = useCreditPayments(null, range);
   const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [popupBlocked, setPopupBlocked] = useState(false);

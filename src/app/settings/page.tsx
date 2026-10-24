@@ -1,17 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Coins, Mail, Printer, ShieldCheck, ShieldHalf, X } from "lucide-react";
+import { ChevronRight, Coins, Mail, MessageSquare, Printer, ShieldCheck, ShieldHalf, X } from "lucide-react";
 import { useAdminGate } from "@/components/AdminGate";
 import ChangePasswordCard from "@/components/ChangePasswordCard";
 import NumField from "@/components/ui/NumField";
+import SwitchTrack from "@/components/ui/SwitchTrack";
 import { useStoreSettings, saveStoreSettings, type StoreSettings } from "@/lib/firestore/settings";
 import { sendTestDeviceEmail, setDeviceStatus } from "@/lib/firestore/devices";
 import { collectDeviceDetails, getDeviceId } from "@/lib/device";
 import { printTickets, usePrinter } from "@/lib/printer";
 import { testTicket } from "@/lib/receipts";
 import { money } from "@/lib/format";
+import { smsAccountStatus } from "@/lib/sms";
 
 const ROUND_OFF_PRESETS = [0, 10, 20, 50];
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -22,19 +24,8 @@ function sameValue(a: unknown, b: unknown): boolean {
 
 function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${checked ? "bg-accent" : "bg-border"}`}
-    >
-      <span
-        className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-          checked ? "translate-x-6" : "translate-x-1"
-        }`}
-      />
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)}>
+      <SwitchTrack on={checked} />
     </button>
   );
 }
@@ -85,6 +76,27 @@ export default function SettingsPage() {
   const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [emailText, setEmailText] = useState("");
   const [testing, setTesting] = useState(false);
+  const [smsAccount, setSmsAccount] = useState<
+    { status: string; balance: string; plan: string; senderId: string } | { error: string } | null
+  >(null);
+  const [smsChecking, setSmsChecking] = useState(false);
+  const isAdmin = !gate;
+
+  function loadSmsAccount() {
+    setSmsChecking(true);
+    smsAccountStatus()
+      .then(({ data }) => setSmsAccount(data))
+      .catch((err: Error) => setSmsAccount({ error: err.message }))
+      .finally(() => setSmsChecking(false));
+  }
+
+  // First load: smsAccount is null, which already reads as "Checking…".
+  useEffect(() => {
+    if (!isAdmin) return;
+    smsAccountStatus()
+      .then(({ data }) => setSmsAccount(data))
+      .catch((err: Error) => setSmsAccount({ error: err.message }));
+  }, [isAdmin]);
 
   function addEmail() {
     const email = emailText.trim().toLowerCase();
@@ -231,6 +243,79 @@ export default function SettingsPage() {
                 onChange={(v) => set("printCounterCopy", v)}
               />
             </Row>
+          </Card>
+
+          <Card icon={MessageSquare} title="SMS">
+            <div className="flex items-center gap-3 px-4 py-3.5">
+              <div className="min-w-0 flex-1">
+                <div className="text-xs font-bold uppercase tracking-wider text-muted-2">SMSlenz balance</div>
+                {smsAccount === null ? (
+                  <div className="text-[15px] font-bold text-muted">Checking…</div>
+                ) : "error" in smsAccount ? (
+                  <div className="text-sm font-bold text-danger">{smsAccount.error}</div>
+                ) : (
+                  <>
+                    <div className="tabular-nums text-2xl font-extrabold">{smsAccount.balance} credits</div>
+                    <div className="text-xs font-medium text-muted">
+                      Sender “{smsAccount.senderId}” · {smsAccount.plan}
+                      {smsAccount.status !== "active" && ` · ${smsAccount.status}`}
+                    </div>
+                  </>
+                )}
+              </div>
+              <button
+                onClick={loadSmsAccount}
+                disabled={smsChecking}
+                className="min-h-[40px] shrink-0 rounded-xl border border-border px-4 text-sm font-bold disabled:opacity-50"
+              >
+                {smsChecking ? "…" : "Refresh"}
+              </button>
+            </div>
+            <Row
+              title="Text the bill on every sale"
+              body="The default for the “Send SMS” tick in the basket. Goes to the customer's mobile on record, or the number a walk-in gives."
+            >
+              <Switch label="Text the bill on every sale" checked={draft.sendBillSms} onChange={(v) => set("sendBillSms", v)} />
+            </Row>
+            <Row
+              title="Ask walk-ins for a mobile"
+              body="After a walk-in sale, ask for their number and save them as a customer (name optional). The cashier can always skip it."
+            >
+              <Switch
+                label="Ask walk-ins for a mobile"
+                checked={draft.askWalkInMobile}
+                onChange={(v) => set("askWalkInMobile", v)}
+              />
+            </Row>
+            <Row
+              title="Text credit payments"
+              body="The default for the “Send SMS” tick on a credit payment: what was paid and the balance left."
+            >
+              <Switch
+                label="Text credit payments"
+                checked={draft.sendPaymentSms}
+                onChange={(v) => set("sendPaymentSms", v)}
+              />
+            </Row>
+            <Row
+              title="Welcome new customers"
+              body="Text a welcome with the shop's numbers to each customer added from now on — including walk-ins saved at the till."
+            >
+              <Switch
+                label="Welcome new customers"
+                checked={draft.sendWelcomeSms}
+                onChange={(v) => set("sendWelcomeSms", v)}
+              />
+            </Row>
+            <Link href="/sms" className="flex items-center justify-between gap-4 px-4 py-3.5">
+              <div className="min-w-0">
+                <div className="text-[15px] font-bold">Send a promotion</div>
+                <div className="mt-0.5 text-xs font-medium leading-relaxed text-muted">
+                  One message to everyone, or just shops or people, with a preview first.
+                </div>
+              </div>
+              <ChevronRight size={18} className="shrink-0 text-muted-2" />
+            </Link>
           </Card>
 
           <Card icon={Coins} title="Walk-in round-off">

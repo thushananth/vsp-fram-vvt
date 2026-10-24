@@ -10,7 +10,7 @@ import { useProducts } from "@/lib/firestore/products";
 import { useCategories } from "@/lib/firestore/categories";
 import { useUsers } from "@/lib/firestore/users";
 import { useCan } from "@/lib/firestore/permissions";
-import Splash from "@/components/Splash";
+import PageLoading from "@/components/PageLoading";
 import ReportTabs from "@/components/ReportTabs";
 import { dateAndTime, localDateKey, money, todayKey } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
@@ -51,8 +51,6 @@ function Panel({ title, note, children }: { title: string; note?: string; childr
 export default function ReportPage() {
   const { can, loading: canLoading } = useCan();
   const today = todayKey();
-  const { bills, loading: billsLoading } = useBills();
-  const { payments, loading: paymentsLoading } = useCreditPayments();
   const { customers } = useCustomers();
   const { products } = useProducts({ includeInactive: true });
   const { categories } = useCategories();
@@ -71,6 +69,8 @@ export default function ReportPage() {
     () => resolveRange(mode, { from: customFrom, to: customTo }),
     [mode, customFrom, customTo],
   );
+  const { bills, loading: billsLoading } = useBills(range);
+  const { payments, loading: paymentsLoading } = useCreditPayments(null, range);
   const isToday = range.singleDayKey === today;
   const canSummary = isToday ? can("todaySummary") || can("rangeSummary") : can("rangeSummary");
   const canDetail = isToday ? can("todayDetail") || can("rangeDetail") : can("rangeDetail");
@@ -124,7 +124,7 @@ export default function ReportPage() {
     }
   }
 
-  if (canLoading) return <Splash />;
+  if (canLoading) return <PageLoading />;
   if (!can("todaySummary") && !can("todayDetail") && !canAnyDate) {
     return (
       <div className="mx-auto max-w-md p-8 text-center">

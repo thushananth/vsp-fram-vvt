@@ -116,7 +116,7 @@ export default function CustomerSheet({
 
         {customer && customer.advance > 0 && (
           <p className="tabular-nums rounded-xl bg-success/5 px-3.5 py-3 text-sm font-semibold text-success">
-            Holds {money(customer.advance)} advance — use it from the Credit screen.
+            Holds {money(customer.advance)} advance — taken off their next bill at the till, or used from the Credit screen.
           </p>
         )}
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAdminGate } from "@/components/AdminGate";
 import { useBills } from "@/lib/firestore/bills";
 import { useUsers } from "@/lib/firestore/users";
@@ -11,7 +11,16 @@ const dayKey = localDateKey;
 
 export default function DashboardPage() {
   const gate = useAdminGate("The dashboard", "It covers the whole shop's takings and staff, so it stays with admins.");
-  const { bills, loading: billsLoading } = useBills();
+  // Only what the charts cover — this month and the five before it — so the
+  // dashboard doesn't download every bill ever written each time it opens.
+  const [span] = useState(() => {
+    const now = new Date();
+    return {
+      startMs: new Date(now.getFullYear(), now.getMonth() - 5, 1).getTime(),
+      endMs: new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime(),
+    };
+  });
+  const { bills, loading: billsLoading } = useBills(span);
   const { users, loading: usersLoading } = useUsers();
 
   const today = localDateKey();

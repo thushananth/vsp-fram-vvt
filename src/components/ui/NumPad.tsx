@@ -5,21 +5,28 @@ import { Delete } from "lucide-react";
 export type PadKey = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "." | "back" | "clear";
 
 const KEYS: PadKey[] = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "back"];
+/** A phone's dial pad — 1 on top — for typing mobile numbers. Clear sits where "*" would be. */
+const PHONE_KEYS: PadKey[] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "back"];
 
 /**
  * An on-screen number pad. The till's fields are display boxes rather than
  * inputs, so a tablet never throws its own keyboard over half the sheet.
+ * `layout="phone"` lays it out like a phone's dial pad, for mobile numbers;
+ * amounts keep the calculator layout, 7 8 9 on top.
  */
 export default function NumPad({
   onKey,
   allowDecimal = true,
+  layout = "calculator",
 }: {
   onKey: (key: PadKey) => void;
   allowDecimal?: boolean;
+  layout?: "calculator" | "phone";
 }) {
+  const phone = layout === "phone";
   return (
     <div className="grid select-none grid-cols-3 gap-2">
-      {KEYS.map((k) => {
+      {(phone ? PHONE_KEYS : KEYS).map((k) => {
         const disabled = k === "." && !allowDecimal;
         return (
           <button
@@ -28,22 +35,32 @@ export default function NumPad({
             disabled={disabled}
             onClick={() => onKey(k)}
             onContextMenu={(e) => e.preventDefault()}
-            aria-label={k === "back" ? "Delete" : k === "." ? "Decimal point" : k}
+            aria-label={k === "back" ? "Delete" : k === "." ? "Decimal point" : k === "clear" ? "Clear" : k}
             className={`tabular-nums flex h-14 items-center justify-center rounded-2xl text-2xl font-bold transition-colors active:scale-[0.96] disabled:opacity-30 sm:h-16 ${
-              k === "back" ? "bg-ground text-muted active:bg-border" : "border border-border bg-surface text-ink active:bg-ground"
+              k === "back" || k === "clear"
+                ? "bg-ground text-muted active:bg-border"
+                : "border border-border bg-surface text-ink active:bg-ground"
             }`}
           >
-            {k === "back" ? <Delete className="h-6 w-6" /> : k}
+            {k === "back" ? (
+              <Delete className="h-6 w-6" />
+            ) : k === "clear" ? (
+              <span className="text-sm font-bold uppercase tracking-wider">Clear</span>
+            ) : (
+              k
+            )}
           </button>
         );
       })}
-      <button
-        type="button"
-        onClick={() => onKey("clear")}
-        className="col-span-3 h-11 rounded-2xl bg-ground text-sm font-bold uppercase tracking-wider text-muted active:bg-border"
-      >
-        Clear
-      </button>
+      {!phone && (
+        <button
+          type="button"
+          onClick={() => onKey("clear")}
+          className="col-span-3 h-11 rounded-2xl bg-ground text-sm font-bold uppercase tracking-wider text-muted active:bg-border"
+        >
+          Clear
+        </button>
+      )}
     </div>
   );
 }

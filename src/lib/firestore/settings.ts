@@ -30,6 +30,18 @@ export interface StoreSettings {
   /** Where new-device approval codes are emailed. Empty means every active
    *  admin's login email. */
   deviceApprovalEmails: string[];
+  /** Text the bill to the customer when a sale is charged. The cashier can
+   *  still untick it for one bill from the basket. */
+  sendBillSms: boolean;
+  /** After a walk-in sale, ask for a mobile number (skippable) — collected
+   *  for promotion SMS. */
+  askWalkInMobile: boolean;
+  /** Text a welcome to every customer added from now on (functions/ reads
+   *  this from the saved doc, treating "never saved" as on). */
+  sendWelcomeSms: boolean;
+  /** Text the customer a receipt when a credit payment is taken. The cashier
+   *  can still untick it for one payment. */
+  sendPaymentSms: boolean;
 }
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
@@ -42,18 +54,27 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   // device yet, defaulting this on would lock a working shop out of its till.
   deviceVerification: false,
   deviceApprovalEmails: [],
+  sendBillSms: true,
+  askWalkInMobile: true,
+  sendWelcomeSms: true,
+  sendPaymentSms: true,
 };
 
 const STORE_DOC = "settings/store";
 
+/** The last settings any screen received, so a newly opened page starts with
+ *  them instead of "loading" — see lastPermissions. Cleared on sign-out. */
+let lastSettings: StoreSettings | null = null;
+
 export function useStoreSettings(): { settings: StoreSettings; loading: boolean } {
-  const [settings, setSettings] = useState<StoreSettings>(DEFAULT_STORE_SETTINGS);
-  const [loading, setLoading] = useState(true);
+  const [settings, setSettings] = useState<StoreSettings>(() => lastSettings ?? DEFAULT_STORE_SETTINGS);
+  const [loading, setLoading] = useState(() => lastSettings === null);
 
   useEffect(() => {
     let unsubSnapshot: (() => void) | null = null;
     const unsubAuth = onAuthStateChanged(auth, (u) => {
       if (!u) {
+        lastSettings = null;
         setSettings(DEFAULT_STORE_SETTINGS);
         setLoading(false);
         if (unsubSnapshot) {
@@ -65,7 +86,8 @@ export function useStoreSettings(): { settings: StoreSettings; loading: boolean 
       unsubSnapshot = onSnapshot(
         doc(db, STORE_DOC),
         (snap) => {
-          setSettings({ ...DEFAULT_STORE_SETTINGS, ...(snap.data() as Partial<StoreSettings> | undefined) });
+          lastSettings = { ...DEFAULT_STORE_SETTINGS, ...(snap.data() as Partial<StoreSettings> | undefined) };
+          setSettings(lastSettings);
           setLoading(false);
         },
         () => setLoading(false),

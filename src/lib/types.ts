@@ -86,6 +86,12 @@ export interface Bill {
    * to total + discount.
    */
   discount: number;
+  /**
+   * Taken off this bill from the customer's held advance at the till. Not cash
+   * — `paid` is only what was handed over — so `due` is total - advanceUsed -
+   * paid, and cash reports never count the advance a second time.
+   */
+  advanceUsed: number;
 }
 
 export type PaymentType = "cash" | "credit";
@@ -104,6 +110,11 @@ export interface Customer {
    * the customer until it is used against a later bill from the Credit screen.
    */
   advance: number;
+  /** Last balance reminder SMS — set by functions/ only. 0 when never sent. */
+  lastReminderAt: number;
+  /** Saved from the walk-in prompt with no name given — `name` is just the
+   *  number, so SMS greet them as "customer" instead. */
+  autoNamed: boolean;
   active: boolean;
   createdAt: number;
   updatedAt: number;

@@ -472,20 +472,35 @@ function toPayment(id: string, data: Record<string, unknown>): CreditPayment {
 }
 
 /** Payment history — the whole shop's, or one customer's. */
-export function useCreditPayments(customerId?: string | null): {
+export function useCreditPayments(
+  customerId?: string | null,
+  /** Only payments inside this window. The collection carries thousands of
+   *  imported old-app payments, each a billed read per listener — a screen
+   *  showing a date range must not download the whole history. */
+  range?: { startMs: number; endMs: number },
+): {
   payments: CreditPayment[];
   loading: boolean;
 } {
   const [payments, setPayments] = useState<CreditPayment[]>([]);
   const [loading, setLoading] = useState(true);
+  const startMs = range?.startMs;
+  const endMs = range?.endMs;
 
   useEffect(() => {
     setLoading(true);
     // Filtering by customer sorts in JS instead of adding an orderBy, which
-    // would need a composite index for the pair.
+    // would need a composite index for the pair. `createdAt` is epoch millis.
     const q = customerId
       ? query(collection(db, "creditPayments"), where("customerId", "==", customerId))
-      : query(collection(db, "creditPayments"), orderBy("createdAt", "desc"));
+      : startMs !== undefined && endMs !== undefined
+        ? query(
+            collection(db, "creditPayments"),
+            where("createdAt", ">=", startMs),
+            where("createdAt", "<", endMs),
+            orderBy("createdAt", "desc"),
+          )
+        : query(collection(db, "creditPayments"), orderBy("createdAt", "desc"));
     return onSnapshot(
       q,
       (snap) => {
@@ -501,7 +516,7 @@ export function useCreditPayments(customerId?: string | null): {
         setLoading(false);
       },
     );
-  }, [customerId]);
+  }, [customerId, startMs, endMs]);
 
   return { payments, loading };
 }

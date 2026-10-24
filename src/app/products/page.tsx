@@ -1,8 +1,9 @@
 "use client";
 
+import SwitchTrack from "@/components/ui/SwitchTrack";
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Eye, EyeOff, Pencil, Plus, Search, Tags, X } from "lucide-react";
-import Splash from "@/components/Splash";
+import PageLoading from "@/components/PageLoading";
 import NumField from "@/components/ui/NumField";
 import { useAuth } from "@/lib/auth";
 import { useCan } from "@/lib/firestore/permissions";
@@ -79,7 +80,7 @@ export default function ProductsPage() {
     await run(() => reorderCategories(list));
   }
 
-  if (canLoading) return <Splash />;
+  if (canLoading) return <PageLoading />;
 
   return (
     <div className="mx-auto max-w-4xl p-4 pb-28">
@@ -625,13 +626,7 @@ function CategorySheet({
             Bills with anything from this category print a second ticket for the counter.
           </span>
         </span>
-        <span className={`relative h-6 w-11 shrink-0 rounded-full ${counterCopy ? "bg-accent" : "bg-border"}`}>
-          <span
-            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
-              counterCopy ? "translate-x-[22px]" : "translate-x-0.5"
-            }`}
-          />
-        </span>
+        <SwitchTrack on={counterCopy} />
       </button>
 
       {error && <p className="mt-3 text-sm font-bold text-danger">{error}</p>}

@@ -51,11 +51,23 @@ service cloud.firestore {
         .hasOnly(['paid', 'due']);
     }
 
+    // A walk-in who gives their mobile after the sale has the bill put under
+    // the customer saved for them. Only a bill with no customer yet and nothing
+    // owing — so no balance moves — and only onto a customer that exists.
+    function onlyLinksWalkIn() {
+      return resource.data.get('customerId', null) == null &&
+        resource.data.get('due', 0) == 0 &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['customerId', 'customerName']) &&
+        request.resource.data.customerId is string &&
+        exists(/databases/$(database)/documents/customers/$(request.resource.data.customerId));
+    }
+
     match /bills/{id} {
       allow read: if isSignedIn();
       allow create: if isSignedIn();
       allow update: if isAdmin() || cashierCan('voidBills') ||
-        (isSignedIn() && onlySettlesCredit());
+        (isSignedIn() && (onlySettlesCredit() || onlyLinksWalkIn()));
       allow delete: if false;
     }
 
@@ -78,6 +90,12 @@ service cloud.firestore {
     match /counters/{id} {
       allow read: if isSignedIn();
       allow write: if isSignedIn();
+    }
+
+    // Log of promotion sends — written by functions/ only.
+    match /smsCampaigns/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
     }
 
     // Cashier permission toggles and store settings — admin-editable from

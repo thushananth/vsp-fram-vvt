@@ -11,6 +11,7 @@ import {
   runTransaction,
   serverTimestamp,
   Timestamp,
+  updateDoc,
   where,
   writeBatch,
 } from "firebase/firestore";
@@ -23,6 +24,8 @@ import type { Bill, BillLine, PaymentType } from "@/lib/types";
 export interface CreatedBill {
   id: string;
   no: number;
+  /** The till's clock when the sale was taken — the time the bill carries. */
+  createdAt: number;
   /** The number came from outside a real lease — see billNumbers.ts. */
   provisional: boolean;
   /**
@@ -54,6 +57,8 @@ interface BillDraft {
   customerName: string | null;
   /** Walk-in round-off already taken off `total`. Absent on older journal entries. */
   discount?: number;
+  /** Customer advance spent on this bill. Absent on older journal entries. */
+  advanceUsed?: number;
 }
 
 function round2(n: number): number {
@@ -64,9 +69,15 @@ function round2(n: number): number {
  * The one place `paid` and `due` are derived, so a bill written at the till and
  * the same bill re-sent from the journal can never disagree about the money.
  */
-function settlement(draft: { total: number; paid: number }): { paid: number; due: number } {
-  const paid = round2(Math.min(Math.max(0, draft.paid), draft.total));
-  return { paid, due: round2(draft.total - paid) };
+function settlement(draft: { total: number; paid: number; advanceUsed?: number }): {
+  paid: number;
+  due: number;
+  advanceUsed: number;
+} {
+  const advanceUsed = round2(Math.min(Math.max(0, draft.advanceUsed ?? 0), draft.total));
+  const payable = round2(draft.total - advanceUsed);
+  const paid = round2(Math.min(Math.max(0, draft.paid), payable));
+  return { paid, due: round2(payable - paid), advanceUsed };
 }
 
 /**
@@ -82,7 +93,7 @@ function settlement(draft: { total: number; paid: number }): { paid: number; due
  * whole path exists to avoid. It hands the pending commit back to the caller.
  */
 function commitBill(draft: BillDraft): Promise<void> {
-  const { paid, due } = settlement(draft);
+  const { paid, due, advanceUsed } = settlement(draft);
 
   const batch = writeBatch(db);
 
@@ -109,14 +120,22 @@ function commitBill(draft: BillDraft): Promise<void> {
     paid,
     due,
     discount: draft.discount ?? 0,
+    advanceUsed,
   });
 
   // Only the unpaid remainder goes on the balance — a bill part-settled at the
   // till must not put its whole total on the customer's account.
-  if (due > 0 && draft.customerId) {
+  // Advance spent at the till comes off what is held. increment(), like the
+  // balance, so it queues offline — two tills spending the same advance while
+  // both offline can take it below zero; the Credit screen shows that.
+  if ((due > 0 || advanceUsed > 0) && draft.customerId) {
     batch.set(
       doc(db, "customers", draft.customerId),
-      { remainingCredit: increment(due), updatedAt: Date.now() },
+      {
+        ...(due > 0 ? { remainingCredit: increment(due) } : {}),
+        ...(advanceUsed > 0 ? { advance: increment(-advanceUsed) } : {}),
+        updatedAt: Date.now(),
+      },
       { merge: true },
     );
   }
@@ -140,10 +159,11 @@ export function createBill(params: {
   customerName: string | null;
   paid: number;
   discount?: number;
+  advanceUsed?: number;
 }): CreatedBill {
   // A backstop, not the user-facing check — the till blocks a short payment
   // from a walk-in before it ever gets here, with a warning the cashier reads.
-  if (params.paid < params.total && !params.customerId) {
+  if (!params.customerId && (params.paid < params.total || (params.advanceUsed ?? 0) > 0)) {
     throw new Error("Money left owing needs a customer to owe it");
   }
 
@@ -173,7 +193,16 @@ export function createBill(params: {
   // through its lease mid-shift isn't stranded when the wifi drops.
   topUpLeaseIfLow();
 
-  return { id: draft.id, no, provisional, accepted };
+  return { id: draft.id, no, createdAt: draft.createdAt, provisional, accepted };
+}
+
+/**
+ * Put a walk-in's bill under the customer saved for them from the after-sale
+ * mobile prompt. Queued like the bill itself, so it works offline and lands
+ * after it. The rules allow this only on a fully paid bill with no customer.
+ */
+export function linkBillToCustomer(billId: string, customer: { id: string; name: string }): Promise<void> {
+  return updateDoc(doc(db, "bills", billId), { customerId: customer.id, customerName: customer.name });
 }
 
 /**
@@ -228,20 +257,27 @@ export async function voidBill(billId: string) {
       if (bill.status === "void") return;
 
       const outstanding = bill.due ?? 0;
+      // Advance spent on the bill goes back to the customer — no sale, no spend.
+      const advanceUsed = bill.advanceUsed ?? 0;
       const customerRef = bill.customerId ? doc(db, "customers", bill.customerId) : null;
       let customerCredit = 0;
-      if (customerRef && outstanding > 0) {
+      let customerAdvance = 0;
+      if (customerRef && (outstanding > 0 || advanceUsed > 0)) {
         const customerSnap = await tx.get(customerRef);
         customerCredit = customerSnap.data()?.remainingCredit ?? 0;
+        customerAdvance = customerSnap.data()?.advance ?? 0;
       }
 
       tx.set(billRef, { status: "void", due: 0 }, { merge: true });
 
-      if (customerRef && outstanding > 0) {
+      if (customerRef && (outstanding > 0 || advanceUsed > 0)) {
         tx.set(
           customerRef,
           {
-            remainingCredit: Math.max(0, customerCredit - outstanding),
+            ...(outstanding > 0
+              ? { remainingCredit: Math.max(0, customerCredit - outstanding) }
+              : {}),
+            ...(advanceUsed > 0 ? { advance: round2(customerAdvance + advanceUsed) } : {}),
             updatedAt: Date.now(),
           },
           { merge: true },
@@ -286,15 +322,38 @@ function toBill(id: string, data: Record<string, unknown>, pending: boolean): Bi
     paid: (data.paid as number) ?? total,
     due: (data.due as number) ?? 0,
     discount: (data.discount as number) ?? 0,
+    advanceUsed: (data.advanceUsed as number) ?? 0,
   };
 }
 
-export function useBills(): { bills: Bill[]; loading: boolean } {
+/** A time window, as resolveRange gives it: from startMs up to (not incl.) endMs. */
+export interface MsRange {
+  startMs: number;
+  endMs: number;
+}
+
+/**
+ * Bills, newest first — only those inside `range` when one is given. Every
+ * bill is a billed Firestore read each time a screen opens its listener, so a
+ * screen that shows a date range must ask for that range, not the whole history.
+ */
+export function useBills(range?: MsRange): { bills: Bill[]; loading: boolean } {
   const [bills, setBills] = useState<Bill[]>([]);
   const [loading, setLoading] = useState(true);
+  const startMs = range?.startMs;
+  const endMs = range?.endMs;
 
   useEffect(() => {
-    const q = query(collection(db, "bills"), orderBy("createdAt", "desc"));
+    // Range on the one field it is ordered by — no composite index needed.
+    const q =
+      startMs !== undefined && endMs !== undefined
+        ? query(
+            collection(db, "bills"),
+            where("createdAt", ">=", Timestamp.fromMillis(startMs)),
+            where("createdAt", "<", Timestamp.fromMillis(endMs)),
+            orderBy("createdAt", "desc"),
+          )
+        : query(collection(db, "bills"), orderBy("createdAt", "desc"));
     // Without includeMetadataChanges the listener never re-fires when a queued
     // write is acknowledged, so the "Queued" badge would never clear.
     return onSnapshot(
@@ -306,7 +365,7 @@ export function useBills(): { bills: Bill[]; loading: boolean } {
       },
       () => setLoading(false),
     );
-  }, []);
+  }, [startMs, endMs]);
 
   return { bills, loading };
 }

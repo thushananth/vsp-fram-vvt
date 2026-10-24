@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import CustomerSheet from "@/components/CustomerSheet";
 import { useCustomerBills } from "@/lib/firestore/bills";
@@ -8,6 +8,8 @@ import { useCreditPayments, describePayment } from "@/lib/firestore/credit";
 import { useAuth } from "@/lib/auth";
 import { useCan } from "@/lib/firestore/permissions";
 import { dateAndTime, money } from "@/lib/format";
+import { normalizeMobile, reminderPreview, sendReminderSms } from "@/lib/sms";
+import { MessageSquare } from "lucide-react";
 import type { Customer, CustomerType } from "@/lib/types";
 
 export default function CustomersPage() {
@@ -17,6 +19,13 @@ export default function CustomersPage() {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [viewing, setViewing] = useState<Customer | null>(null);
+  const [reminding, setReminding] = useState<Customer | null>(null);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 3000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
 
   const isAdmin = profile?.role === "admin";
   const { can } = useCan();
@@ -101,6 +110,17 @@ export default function CustomersPage() {
                   <div className="tabular-nums text-[11px] font-bold text-success">+{money(c.advance)} advance</div>
                 )}
               </div>
+              {c.remainingCredit > 0 && normalizeMobile(c.mobileNumber) && (
+                <button
+                  onClick={() => setReminding(c)}
+                  aria-label={`Send ${c.name} a balance reminder`}
+                  title={c.lastReminderAt ? `Last reminded ${dateAndTime(c.lastReminderAt)}` : "Send a balance reminder SMS"}
+                  className="flex shrink-0 items-center gap-1 rounded-lg border border-accent/40 bg-accent/5 px-2.5 py-2 text-[11px] font-bold text-accent"
+                >
+                  <MessageSquare size={13} strokeWidth={2.4} />
+                  Remind
+                </button>
+              )}
               {can("editCustomers") && (
                 <button
                   onClick={() => setEditing(c)}
@@ -119,12 +139,99 @@ export default function CustomersPage() {
         </div>
       )}
 
+      {notice && (
+        <div
+          role="status"
+          className={`fixed right-4 top-4 z-50 max-w-[calc(100vw-2rem)] rounded-xl px-4 py-3 text-sm font-semibold text-white shadow-lg sm:max-w-sm ${
+            notice.ok ? "bg-ink" : "bg-danger"
+          }`}
+        >
+          {notice.text}
+          <button onClick={() => setNotice(null)} className="ml-3 underline">
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {reminding && (
+        <ReminderConfirm
+          customer={reminding}
+          onClose={() => setReminding(null)}
+          onDone={(n) => {
+            setReminding(null);
+            setNotice(n);
+          }}
+        />
+      )}
+
       {viewing && <CustomerHistorySheet customer={viewing} onClose={() => setViewing(null)} />}
 
       {creating && <CustomerSheet onClose={() => setCreating(false)} />}
       {editing && (
         <CustomerSheet customer={editing} canDelete={isAdmin} onClose={() => setEditing(null)} />
       )}
+    </div>
+  );
+}
+
+/** Shows the exact text before it goes out — a reminder costs credit and can't be taken back. */
+function ReminderConfirm({
+  customer,
+  onClose,
+  onDone,
+}: {
+  customer: Customer;
+  onClose: () => void;
+  onDone: (notice: { ok: boolean; text: string }) => void;
+}) {
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSend() {
+    setSending(true);
+    setError(null);
+    try {
+      await sendReminderSms({ customerId: customer.id });
+      onDone({ ok: true, text: `Reminder sent to ${customer.name}` });
+    } catch (err) {
+      // Kept in the sheet so the cashier sees why, e.g. "already reminded".
+      setError((err as Error).message);
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-ink/60 p-4">
+      <div className="w-full max-w-sm rounded-3xl bg-surface p-5">
+        <h3 className="text-xl font-extrabold">Remind {customer.name}?</h3>
+        <p className="mt-1.5 text-sm font-medium leading-relaxed text-muted">
+          SMS to {customer.mobileNumber}
+          {customer.lastReminderAt > 0 && <> · last reminded {dateAndTime(customer.lastReminderAt)}</>}
+        </p>
+        <p className="mt-3 whitespace-pre-wrap rounded-xl bg-ground px-3.5 py-3 text-sm font-medium">
+          {reminderPreview(customer.name, customer.remainingCredit, customer.autoNamed)}
+        </p>
+        {error && (
+          <p role="alert" className="mt-3 rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-sm font-bold text-danger">
+            {error}
+          </p>
+        )}
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={onClose}
+            className="min-h-[52px] flex-1 rounded-2xl border border-border text-base font-bold text-muted"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={sending}
+            onClick={handleSend}
+            className="min-h-[52px] flex-[2] rounded-2xl bg-accent text-base font-bold text-white disabled:opacity-50"
+          >
+            {sending ? "Sending…" : "Send reminder"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

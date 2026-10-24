@@ -25,7 +25,7 @@ function status(bill: Bill): { label: string; color: [number, number, number] } 
  */
 export async function downloadBillPdf(
   bill: Bill,
-  ctx: { unitOf: (productId: string) => string; customerMobile?: string; cashierName?: string },
+  ctx: { unitOf: (productId: string) => string; customerMobile?: string; customerCredit?: number; cashierName?: string },
 ): Promise<void> {
   const { jsPDF, autoTable } = await loadPdf();
   const doc = new jsPDF({ unit: "mm", format: "a5" });
@@ -82,16 +82,29 @@ export async function downloadBillPdf(
     rows.push(["Subtotal", pdfAmount(bill.total + bill.discount)]);
     rows.push(["Round-off", `- ${pdfAmount(bill.discount)}`]);
   }
+  const advance: [string, string][] =
+    bill.advanceUsed > 0 ? [["Advance used", `- ${pdfAmount(bill.advanceUsed)}`]] : [];
   const after: [string, string][] =
     bill.paymentType === "credit"
       ? [
+          ...advance,
           ["Paid", pdfAmount(bill.paid)],
           ["Balance due", pdfAmount(bill.due)],
         ]
       : [
+          ...advance,
           ["Cash", pdfAmount(bill.tender)],
           ["Change", pdfAmount(bill.change)],
         ];
+  // The customer's running balance today (it already includes this bill's
+  // due), so the PDF shows what they owed before and what they owe now.
+  if (bill.customerId && ctx.customerCredit !== undefined && bill.status !== "void") {
+    const owed = ctx.customerCredit;
+    const before = Math.max(0, owed - bill.due);
+    if (owed > 0 || before > 0) {
+      after.push(["Previous credit", pdfAmount(before)], ["Total credit owed", pdfAmount(owed)]);
+    }
+  }
   const cardW = 70;
   const cardX = w - m - cardW;
   const cardH = rows.length * 5.5 + 13 + after.length * 5.5 + 4;

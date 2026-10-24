@@ -39,6 +39,8 @@ export interface JournalEntry {
   customerName: string | null;
   /** Walk-in round-off — see Bill.discount. */
   discount?: number;
+  /** Customer advance used — see Bill.advanceUsed. Absent on older entries. */
+  advanceUsed?: number;
   state: "pending" | "failed";
   /** Why the server refused it. Only set once state is "failed". */
   error: string | null;

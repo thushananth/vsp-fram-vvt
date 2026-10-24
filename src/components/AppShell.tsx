@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageSquare,
   MoreHorizontal,
   Package,
   PanelLeftClose,
@@ -51,6 +52,7 @@ const FULL_NAV: NavItem[] = [
   { href: "/users", label: "Users", icon: Users, adminOnly: true },
   { href: "/permissions", label: "Permissions", icon: ShieldHalf, adminOnly: true },
   { href: "/devices", label: "Devices", icon: ShieldCheck, adminOnly: true },
+  { href: "/sms", label: "SMS", icon: MessageSquare, adminOnly: true },
   { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
 ];
 
@@ -318,6 +320,9 @@ function SidebarContent({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] font-bold leading-tight">{profile.name}</p>
                 <p className="truncate text-[11px] font-medium text-white/35">{profile.email}</p>
+                <p className="truncate text-[10px] font-semibold text-white/25">
+                  v{process.env.NEXT_PUBLIC_APP_VERSION}
+                </p>
               </div>
             )}
           </div>

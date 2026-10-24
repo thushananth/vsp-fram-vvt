@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuth } from "@/lib/auth";
-import Splash from "@/components/Splash";
+import PageLoading from "@/components/PageLoading";
 import { usePermissions, type CashierPermissions } from "@/lib/firestore/permissions";
 
 /**
@@ -20,7 +20,7 @@ import { usePermissions, type CashierPermissions } from "@/lib/firestore/permiss
 export function useAdminGate(what: string, why: string): React.ReactElement | null {
   const { profile, loading } = useAuth();
 
-  if (loading) return <Splash />;
+  if (loading) return <PageLoading />;
   if (profile?.role !== "admin") {
     return (
       <div className="mx-auto max-w-md p-8 text-center">
@@ -44,7 +44,7 @@ export function usePermissionGate(
   const { profile, loading } = useAuth();
   const { permissions, loading: permissionsLoading } = usePermissions();
 
-  if (loading || permissionsLoading) return <Splash />;
+  if (loading || permissionsLoading) return <PageLoading />;
   if (profile?.role !== "admin" && !permissions[flag]) {
     return (
       <div className="mx-auto max-w-md p-8 text-center">

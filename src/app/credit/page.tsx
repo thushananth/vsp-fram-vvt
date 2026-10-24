@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import { useCustomerBills } from "@/lib/firestore/bills";
 import {
@@ -19,7 +19,9 @@ import { useCan } from "@/lib/firestore/permissions";
 import { useStoreSettings } from "@/lib/firestore/settings";
 import { printTickets } from "@/lib/printer";
 import { paymentReceipt } from "@/lib/receipts";
+import { normalizeMobile, sendPaymentSms } from "@/lib/sms";
 import NumField from "@/components/ui/NumField";
+import SwitchTrack from "@/components/ui/SwitchTrack";
 import { dateAndTime, money, todayKey } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
 import type { Customer, CreditPayment } from "@/lib/types";
@@ -163,6 +165,15 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  /** This payment only: null follows the store setting, true/false overrides it. */
+  const [smsThis, setSmsThis] = useState<boolean | null>(null);
+  const hasMobile = normalizeMobile(customer.mobileNumber) !== null;
+  const texting = hasMobile && (smsThis ?? settings.sendPaymentSms);
+
+  /** Fire-and-forget: the payment is already recorded; only a failure is worth saying. */
+  function textPayment(paymentId: string, doneText: string) {
+    sendPaymentSms({ paymentId }).catch((err: Error) => setDone(`${doneText} — SMS not sent (${err.message})`));
+  }
 
   const lines = useMemo(
     () => outstandingLines({ bills, openingBalance: customer.openingBalance }),
@@ -191,7 +202,9 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
         source: "advance",
       });
       const applied = result.allocations.reduce((sum, a) => sum + a.amount, 0);
-      setDone(`${money(applied)} of ${customer.name}'s advance used against what they owe`);
+      const doneText = `${money(applied)} of ${customer.name}'s advance used against what they owe`;
+      setDone(doneText);
+      if (texting) textPayment(result.id, doneText);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -211,11 +224,12 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
         receivedBy,
         note: note.trim() || null,
       });
-      setDone(
+      const doneText =
         result.advance > 0
           ? `${money(amount)} received from ${customer.name} — ${money(result.advance)} kept as advance`
-          : `${money(amount)} received from ${customer.name}`,
-      );
+          : `${money(amount)} received from ${customer.name}`;
+      setDone(doneText);
+      if (texting) textPayment(result.id, doneText);
       // The old app handed the customer a payment slip every time.
       if (settings.printBills) {
         printTickets([
@@ -349,6 +363,29 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
           className="mt-2 h-[46px] w-full rounded-xl border border-border bg-ground px-3.5 text-base outline-none focus:border-accent"
         />
 
+        {/* Text the payment — ticked by default from Settings, untick for one payment. */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={texting}
+          disabled={!hasMobile}
+          onClick={() => setSmsThis(!texting)}
+          className="mt-2 flex w-full items-center gap-3 rounded-xl border border-border px-3.5 py-2.5 text-left disabled:opacity-60"
+        >
+          <MessageSquare className={`h-[18px] w-[18px] shrink-0 ${texting ? "text-accent" : "text-muted-2"}`} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold">{texting ? "Send SMS" : "No SMS"}</span>
+            <span className="block text-[11px] font-medium text-muted-2">
+              {!hasMobile
+                ? `${customer.name} has no mobile number on record`
+                : texting
+                  ? `Payment and balance left texted to ${customer.mobileNumber}`
+                  : "Payment won't be texted"}
+            </span>
+          </span>
+          <SwitchTrack on={texting} />
+        </button>
+
         {extra > 0 && (
           <p className="tabular-nums mt-2 rounded-xl bg-success/5 px-3.5 py-2.5 text-sm font-semibold text-success">
             {owed > 0 ? `Clears the ${money(owed)} owed — ` : "Nothing is owed — "}
@@ -371,7 +408,6 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
 }
 
 function HistoryTab() {
-  const { payments, loading } = useCreditPayments();
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
 
@@ -388,6 +424,7 @@ function HistoryTab() {
     () => resolveRange(rangeMode, { from: customFrom, to: customTo }),
     [rangeMode, customFrom, customTo],
   );
+  const { payments, loading } = useCreditPayments(null, range);
   const inRange = useMemo(
     () => payments.filter((p) => p.createdAt >= range.startMs && p.createdAt < range.endMs),
     [payments, range],
