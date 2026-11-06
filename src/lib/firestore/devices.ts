@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { collection, doc, onSnapshot, orderBy, query } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "@/lib/firebase";
+import { useLive } from "@/lib/firestore/live";
 import type { DeviceDetails } from "@/lib/device";
 
 export type DeviceStatus = "pending" | "approved" | "blocked";
@@ -111,24 +112,18 @@ export function useDeviceApproval(
   return { device, loading, fromCache, denied };
 }
 
+const NO_DEVICES: DeviceApproval[] = [];
+
 /** Every registered device — the admin Devices screen. */
 export function useDevices(): { devices: DeviceApproval[]; loading: boolean } {
-  const [devices, setDevices] = useState<DeviceApproval[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const q = query(collection(db, "deviceApprovals"), orderBy("lastSeenAt", "desc"));
-    return onSnapshot(
-      q,
-      (snap) => {
-        setDevices(snap.docs.map((d) => toDevice(d.id, d.data())));
-        setLoading(false);
-      },
-      () => setLoading(false),
-    );
-  }, []);
-
-  return { devices, loading };
+  const { data, loading } = useLive<DeviceApproval[]>("deviceApprovals:byLastSeen", (emit, fail) =>
+    onSnapshot(
+      query(collection(db, "deviceApprovals"), orderBy("lastSeenAt", "desc")),
+      (snap) => emit(snap.docs.map((d) => toDevice(d.id, d.data()))),
+      fail,
+    ),
+  );
+  return { devices: data ?? NO_DEVICES, loading };
 }
 
 export const requestDeviceApproval = httpsCallable<

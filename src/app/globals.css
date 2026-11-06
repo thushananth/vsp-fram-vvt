@@ -133,3 +133,102 @@ body {
     transform: none;
   }
 }
+
+/* ---- Navigation smoothness ------------------------------------------------
+   Pages settle in, the tapped nav item answers at once, and first-load
+   placeholders only appear when a wait is long enough to notice. */
+
+/* Opacity only: a transform here, even mid-animation, would make this wrapper
+   the containing block for the pages' fixed sheets and bars and shift them. */
+@keyframes page-enter {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.page-enter {
+  animation: page-enter 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Tint on the nav item being opened; delayed so a prefetched route never flickers. */
+.nav-pending {
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.nav-pending.is-pending {
+  opacity: 1;
+  transition-delay: 0.12s;
+}
+
+@keyframes route-progress {
+  0% {
+    transform: scaleX(0);
+  }
+  60% {
+    transform: scaleX(0.7);
+  }
+  100% {
+    transform: scaleX(0.92);
+  }
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Thin bar across the top while a route is on its way. Eases toward the end
+   but never finishes on its own: the new page replacing it is the finish. */
+.route-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  height: 3px;
+  background: var(--color-accent);
+  transform-origin: left;
+  animation:
+    appear 0.1s 0.12s both,
+    route-progress 2.4s 0.12s cubic-bezier(0.1, 0.7, 0.2, 1) both;
+}
+
+/* First-load placeholders: show only if the wait passes ~200ms. */
+.skeleton-in {
+  animation: appear 0.2s 0.2s both;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.skeleton {
+  background-color: #e9edf4;
+  background-image: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.65) 50%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .skeleton,
+  .route-progress {
+    animation: none;
+  }
+  .route-progress {
+    transform: scaleX(0.6);
+  }
+}

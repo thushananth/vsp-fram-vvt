@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { collection, doc, onSnapshot, query, setDoc, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { normalizeMobile, sendWelcomeSms } from "@/lib/sms";
+import { useLive } from "@/lib/firestore/live";
+import { localMobile, normalizeMobile, sendWelcomeSms } from "@/lib/sms";
 import type { Customer, CustomerType } from "@/lib/types";
+
+const NO_CUSTOMERS: Customer[] = [];
 
 function toCustomer(id: string, data: Record<string, unknown>): Customer {
   return {
@@ -24,47 +26,28 @@ function toCustomer(id: string, data: Record<string, unknown>): Customer {
 }
 
 export function useCustomers(): { customers: Customer[]; loading: boolean } {
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
+  const { data, loading } = useLive<Customer[]>("customers:active", (emit, fail) =>
     // Sorted in JS: an orderBy alongside the active filter would need a
     // composite index, and a shop's customer list is small.
-    const q = query(collection(db, "customers"), where("active", "==", true));
-    return onSnapshot(
-      q,
-      (snap) => {
-        setCustomers(
-          snap.docs
-            .map((d) => toCustomer(d.id, d.data()))
-            .sort((a, b) => a.name.localeCompare(b.name)),
-        );
-        setLoading(false);
-      },
-      (err) => {
-        console.error("customers snapshot error", err);
-        setLoading(false);
-      },
-    );
-  }, []);
-
-  return { customers, loading };
+    onSnapshot(
+      query(collection(db, "customers"), where("active", "==", true)),
+      (snap) =>
+        emit(snap.docs.map((d) => toCustomer(d.id, d.data())).sort((a, b) => a.name.localeCompare(b.name))),
+      fail,
+    ),
+  );
+  return { customers: data ?? NO_CUSTOMERS, loading };
 }
 
 export function useCustomer(customerId: string | null): Customer | null {
-  const [customer, setCustomer] = useState<Customer | null>(null);
-
-  useEffect(() => {
-    if (!customerId) {
-      setCustomer(null);
-      return;
-    }
-    return onSnapshot(doc(db, "customers", customerId), (snap) => {
-      setCustomer(snap.exists() ? toCustomer(snap.id, snap.data()) : null);
-    });
-  }, [customerId]);
-
-  return customer;
+  const { data } = useLive<Customer | null>(customerId ? `customer:${customerId}` : null, (emit, fail) =>
+    onSnapshot(
+      doc(db, "customers", customerId!),
+      (snap) => emit(snap.exists() ? toCustomer(snap.id, snap.data()) : null),
+      fail,
+    ),
+  );
+  return data ?? null;
 }
 
 /**
@@ -78,7 +61,7 @@ export function startCreateCustomer(params: {
   type: CustomerType;
   mobileNumber: string;
   autoNamed?: boolean;
-}): { id: string; saved: Promise<void> } {
+}): { id: string; saved: Promise<void>; createdAt: number } {
   const now = Date.now();
   const ref = doc(collection(db, "customers"));
   const saved = setDoc(ref, {
@@ -93,7 +76,7 @@ export function startCreateCustomer(params: {
     updatedAt: now,
   });
   saved.then(() => sendWelcomeSms({ customerId: ref.id })).catch((err) => console.warn("welcome SMS not sent", err));
-  return { id: ref.id, saved };
+  return { id: ref.id, saved, createdAt: now };
 }
 
 export async function createCustomer(params: { name: string; type: CustomerType; mobileNumber: string }) {
@@ -105,12 +88,16 @@ export async function createCustomer(params: { name: string; type: CustomerType;
 /** Name, type and mobile only — a balance is never edited by hand. */
 export async function updateCustomer(
   customerId: string,
-  params: { name: string; type: CustomerType; mobileNumber: string },
+  params: { name?: string; type: CustomerType; mobileNumber?: string },
 ) {
   await setDoc(
     doc(db, "customers", customerId),
     // A walk-in saved under their number stays "autoNamed" until someone types a real name.
-    { ...params, autoNamed: normalizeMobile(params.name) !== null, updatedAt: Date.now() },
+    {
+      ...params,
+      ...(params.name !== undefined && { autoNamed: normalizeMobile(params.name) !== null }),
+      updatedAt: Date.now(),
+    },
     { merge: true },
   );
 }
@@ -127,10 +114,45 @@ export async function deactivateCustomer(customerId: string) {
   );
 }
 
-export function matchesCustomerSearch(customer: Customer, term: string): boolean {
+/** True when a name is just a phone number — how a walk-in is stored. */
+export function isNumberName(name: string): boolean {
+  return /^[\d\s+()-]+$/.test(name.trim()) && normalizeMobile(name) !== null;
+}
+
+export function matchesCustomerSearch(
+  customer: Customer,
+  term: string,
+  includeMobile = true,
+): boolean {
   const q = term.trim().toLowerCase();
   if (!q) return true;
   return (
-    customer.name.toLowerCase().includes(q) || customer.mobileNumber.includes(q)
+    ((includeMobile || !isNumberName(customer.name)) && customer.name.toLowerCase().includes(q)) ||
+    (includeMobile && customer.mobileNumber.includes(q))
   );
+}
+
+/**
+ * A mobile reduced to its 10 local digits, so "077 123 4567", "0771234567"
+ * and "+94 77 123 4567" compare equal. Anything else is returned as digits.
+ */
+export function mobileKey(raw: string): string {
+  // Any form a mobile can be stored in (771234567, 0771234567, +94 77…) → 0771234567.
+  const mobile = normalizeMobile(raw);
+  if (mobile) return localMobile(mobile);
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("94")) return `0${digits.slice(2)}`;
+  return digits;
+}
+
+/** A new or changed mobile must be exactly ten digits — no more, no less. */
+export function isTenDigitMobile(raw: string): boolean {
+  return /^\d{10}$/.test(raw);
+}
+
+/** The active customer already holding this number, if any — one customer per number. */
+export function customerWithMobile(customers: Customer[], raw: string, exceptId?: string): Customer | null {
+  const key = mobileKey(raw);
+  if (!key) return null;
+  return customers.find((c) => c.id !== exceptId && c.active && mobileKey(c.mobileNumber) === key) ?? null;
 }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
   ClipboardList,
@@ -32,6 +32,7 @@ import { useOnline } from "@/lib/online";
 import { useBillJournal } from "@/lib/billJournal";
 import { useBillNumberLease } from "@/lib/billNumbers";
 import BrandMark from "@/components/BrandMark";
+import NavPending from "@/components/NavPending";
 
 type NavItem = {
   href: string;
@@ -92,6 +93,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   const role = profile?.role ?? "cashier";
   const items = FULL_NAV.filter((item) => !item.adminOnly || role === "admin");
+
+  // <Link> only prefetches what is on screen, and the drawer's links aren't
+  // mounted until it opens. Warm every route this user can reach once the
+  // tablet is idle, so the first tap on any of them is instant.
+  const router = useRouter();
+  useEffect(() => {
+    const hrefs = FULL_NAV.filter((item) => !item.adminOnly || role === "admin").map((item) => item.href);
+    const warm = () => hrefs.forEach((href) => router.prefetch(href));
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(warm, { timeout: 4000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const t = setTimeout(warm, 1500);
+    return () => clearTimeout(t);
+  }, [role, router]);
   const coreItems = items.filter((item) => CORE_HREFS.includes(item.href));
 
   return (
@@ -181,6 +197,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               )}
               <Icon size={19} strokeWidth={active ? 2.4 : 2} />
               {item.label}
+              <NavPending tone="light" />
             </Link>
           );
         })}
@@ -414,6 +431,7 @@ function NavGroup({
                 }
               />
               {!collapsed && <span className="truncate">{item.label}</span>}
+              <NavPending tone="dark" />
             </Link>
           );
         })}

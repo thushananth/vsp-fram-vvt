@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
-import { auth, db } from "@/lib/firebase";
+import { db } from "@/lib/firebase";
+import { useLive } from "@/lib/firestore/live";
 
 /**
  * Store-wide settings, admin-editable from Settings. Unlike CashierPermissions
@@ -33,9 +32,6 @@ export interface StoreSettings {
   /** Text the bill to the customer when a sale is charged. The cashier can
    *  still untick it for one bill from the basket. */
   sendBillSms: boolean;
-  /** After a walk-in sale, ask for a mobile number (skippable) — collected
-   *  for promotion SMS. */
-  askWalkInMobile: boolean;
   /** Text a welcome to every customer added from now on (functions/ reads
    *  this from the saved doc, treating "never saved" as on). */
   sendWelcomeSms: boolean;
@@ -55,52 +51,21 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   deviceVerification: false,
   deviceApprovalEmails: [],
   sendBillSms: true,
-  askWalkInMobile: true,
   sendWelcomeSms: true,
   sendPaymentSms: true,
 };
 
 const STORE_DOC = "settings/store";
 
-/** The last settings any screen received, so a newly opened page starts with
- *  them instead of "loading" — see lastPermissions. Cleared on sign-out. */
-let lastSettings: StoreSettings | null = null;
-
 export function useStoreSettings(): { settings: StoreSettings; loading: boolean } {
-  const [settings, setSettings] = useState<StoreSettings>(() => lastSettings ?? DEFAULT_STORE_SETTINGS);
-  const [loading, setLoading] = useState(() => lastSettings === null);
-
-  useEffect(() => {
-    let unsubSnapshot: (() => void) | null = null;
-    const unsubAuth = onAuthStateChanged(auth, (u) => {
-      if (!u) {
-        lastSettings = null;
-        setSettings(DEFAULT_STORE_SETTINGS);
-        setLoading(false);
-        if (unsubSnapshot) {
-          unsubSnapshot();
-          unsubSnapshot = null;
-        }
-        return;
-      }
-      unsubSnapshot = onSnapshot(
-        doc(db, STORE_DOC),
-        (snap) => {
-          lastSettings = { ...DEFAULT_STORE_SETTINGS, ...(snap.data() as Partial<StoreSettings> | undefined) };
-          setSettings(lastSettings);
-          setLoading(false);
-        },
-        () => setLoading(false),
-      );
-    });
-
-    return () => {
-      unsubAuth();
-      if (unsubSnapshot) unsubSnapshot();
-    };
-  }, []);
-
-  return { settings, loading };
+  const { data, loading } = useLive<StoreSettings>(`doc:${STORE_DOC}`, (emit, fail) =>
+    onSnapshot(
+      doc(db, STORE_DOC),
+      (snap) => emit({ ...DEFAULT_STORE_SETTINGS, ...(snap.data() as Partial<StoreSettings> | undefined) }),
+      fail,
+    ),
+  );
+  return { settings: data ?? DEFAULT_STORE_SETTINGS, loading };
 }
 
 export async function saveStoreSettings(settings: StoreSettings) {

@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   collection,
   doc,
@@ -14,6 +13,7 @@ import {
   type Transaction,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { useLive } from "@/lib/firestore/live";
 import { requireServer } from "@/lib/requireServer";
 import type { Bill, CreditAllocation, CreditPayment } from "@/lib/types";
 
@@ -471,6 +471,8 @@ function toPayment(id: string, data: Record<string, unknown>): CreditPayment {
   };
 }
 
+const NO_PAYMENTS: CreditPayment[] = [];
+
 /** Payment history — the whole shop's, or one customer's. */
 export function useCreditPayments(
   customerId?: string | null,
@@ -482,18 +484,20 @@ export function useCreditPayments(
   payments: CreditPayment[];
   loading: boolean;
 } {
-  const [payments, setPayments] = useState<CreditPayment[]>([]);
-  const [loading, setLoading] = useState(true);
   const startMs = range?.startMs;
   const endMs = range?.endMs;
-
-  useEffect(() => {
-    setLoading(true);
+  const ranged = startMs !== undefined && endMs !== undefined;
+  const key = customerId
+    ? `creditPayments:customer:${customerId}`
+    : ranged
+      ? `creditPayments:range:${startMs}-${endMs}`
+      : "creditPayments:all";
+  const { data, loading } = useLive<CreditPayment[]>(key, (emit, fail) => {
     // Filtering by customer sorts in JS instead of adding an orderBy, which
     // would need a composite index for the pair. `createdAt` is epoch millis.
     const q = customerId
       ? query(collection(db, "creditPayments"), where("customerId", "==", customerId))
-      : startMs !== undefined && endMs !== undefined
+      : ranged
         ? query(
             collection(db, "creditPayments"),
             where("createdAt", ">=", startMs),
@@ -503,20 +507,9 @@ export function useCreditPayments(
         : query(collection(db, "creditPayments"), orderBy("createdAt", "desc"));
     return onSnapshot(
       q,
-      (snap) => {
-        setPayments(
-          snap.docs
-            .map((d) => toPayment(d.id, d.data()))
-            .sort((a, b) => b.createdAt - a.createdAt),
-        );
-        setLoading(false);
-      },
-      (err) => {
-        console.error("creditPayments snapshot error", err);
-        setLoading(false);
-      },
+      (snap) => emit(snap.docs.map((d) => toPayment(d.id, d.data())).sort((a, b) => b.createdAt - a.createdAt)),
+      fail,
     );
-  }, [customerId, startMs, endMs]);
-
-  return { payments, loading };
+  });
+  return { payments: data ?? NO_PAYMENTS, loading };
 }

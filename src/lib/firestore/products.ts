@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo } from "react";
 import { addDoc, collection, doc, onSnapshot, setDoc, writeBatch } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
-import { auth, db } from "@/lib/firebase";
+import { db } from "@/lib/firebase";
+import { useLive } from "@/lib/firestore/live";
 import type { Product } from "@/lib/types";
+
+const NO_PRODUCTS: Product[] = [];
 
 function toProduct(id: string, data: Record<string, unknown>): Product {
   return {
@@ -31,42 +33,24 @@ export function useProducts(options: { includeInactive?: boolean } = {}): {
   loading: boolean;
 } {
   const { includeInactive = false } = options;
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let unsubSnapshot: (() => void) | null = null;
-    const unsubAuth = onAuthStateChanged(auth, (u) => {
-      unsubSnapshot?.();
-      unsubSnapshot = null;
-      if (!u) {
-        setProducts([]);
-        setLoading(false);
-        return;
-      }
-      unsubSnapshot = onSnapshot(
-        collection(db, "products"),
-        (snap) => {
-          setProducts(
-            snap.docs
-              .map((d) => toProduct(d.id, d.data()))
-              .filter((p) => includeInactive || p.active)
-              .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
-          );
-          setLoading(false);
-        },
-        (err) => {
-          if (err.code !== "permission-denied") console.error("products snapshot error", err);
-          setLoading(false);
-        },
-      );
-    });
-    return () => {
-      unsubAuth();
-      unsubSnapshot?.();
-    };
-  }, [includeInactive]);
-
+  // One listener for both: the whole collection comes down either way, and
+  // Billing and Products then share it instead of each downloading it.
+  const { data, loading } = useLive<Product[]>("products", (emit, fail) =>
+    onSnapshot(
+      collection(db, "products"),
+      (snap) =>
+        emit(
+          snap.docs
+            .map((d) => toProduct(d.id, d.data()))
+            .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
+        ),
+      fail,
+    ),
+  );
+  const products = useMemo(
+    () => (!data ? NO_PRODUCTS : includeInactive ? data : data.filter((p) => p.active)),
+    [data, includeInactive],
+  );
   return { products, loading };
 }
 

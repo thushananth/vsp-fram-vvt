@@ -273,19 +273,9 @@ export default function SettingsPage() {
             </div>
             <Row
               title="Text the bill on every sale"
-              body="The default for the “Send SMS” tick in the basket. Goes to the customer's mobile on record, or the number a walk-in gives."
+              body="The default for the “Send SMS” tick in the basket. Goes to the customer's mobile on record. A walk-in who wants it is added as a customer when the bill starts."
             >
               <Switch label="Text the bill on every sale" checked={draft.sendBillSms} onChange={(v) => set("sendBillSms", v)} />
-            </Row>
-            <Row
-              title="Ask walk-ins for a mobile"
-              body="After a walk-in sale, ask for their number and save them as a customer (name optional). The cashier can always skip it."
-            >
-              <Switch
-                label="Ask walk-ins for a mobile"
-                checked={draft.askWalkInMobile}
-                onChange={(v) => set("askWalkInMobile", v)}
-              />
             </Row>
             <Row
               title="Text credit payments"

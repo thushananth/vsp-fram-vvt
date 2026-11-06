@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { addDoc, collection, doc, onSnapshot, setDoc, writeBatch } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
-import { auth, db } from "@/lib/firebase";
+import { db } from "@/lib/firebase";
+import { useLive } from "@/lib/firestore/live";
 import { CATEGORY_COLORS } from "@/lib/constants";
 import type { Category } from "@/lib/types";
+
+const NO_CATEGORIES: Category[] = [];
 
 function toCategory(id: string, data: Record<string, unknown>): Category {
   return {
@@ -21,39 +22,19 @@ function toCategory(id: string, data: Record<string, unknown>): Category {
 
 /** Every category, archived ones included — callers filter on `active`. */
 export function useCategories(): { categories: Category[]; loading: boolean } {
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let unsubSnapshot: (() => void) | null = null;
-    const unsubAuth = onAuthStateChanged(auth, (u) => {
-      unsubSnapshot?.();
-      unsubSnapshot = null;
-      if (!u) {
-        setCategories([]);
-        setLoading(false);
-        return;
-      }
-      unsubSnapshot = onSnapshot(
-        collection(db, "categories"),
-        (snap) => {
-          setCategories(
-            snap.docs
-              .map((d) => toCategory(d.id, d.data()))
-              .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
-          );
-          setLoading(false);
-        },
-        () => setLoading(false),
-      );
-    });
-    return () => {
-      unsubAuth();
-      unsubSnapshot?.();
-    };
-  }, []);
-
-  return { categories, loading };
+  const { data, loading } = useLive<Category[]>("categories", (emit, fail) =>
+    onSnapshot(
+      collection(db, "categories"),
+      (snap) =>
+        emit(
+          snap.docs
+            .map((d) => toCategory(d.id, d.data()))
+            .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)),
+        ),
+      fail,
+    ),
+  );
+  return { categories: data ?? NO_CATEGORIES, loading };
 }
 
 export type CategoryInput = Pick<Category, "name" | "unit" | "counterCopy" | "color">;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { MessageSquare, Pencil, Trash2 } from "lucide-react";
+import { ChevronDown, MessageSquare, Pencil, Trash2 } from "lucide-react";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import { useCustomerBills } from "@/lib/firestore/bills";
 import {
@@ -15,15 +15,18 @@ import {
   useCreditPayments,
 } from "@/lib/firestore/credit";
 import { useAuth } from "@/lib/auth";
+import { useCustomerLabel } from "@/lib/customerName";
 import { useCan } from "@/lib/firestore/permissions";
 import { useStoreSettings } from "@/lib/firestore/settings";
 import { printTickets } from "@/lib/printer";
 import { paymentReceipt } from "@/lib/receipts";
 import { normalizeMobile, sendPaymentSms } from "@/lib/sms";
 import NumField from "@/components/ui/NumField";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import SwitchTrack from "@/components/ui/SwitchTrack";
 import { dateAndTime, money, todayKey } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
+import BillBreakdown, { paidSoFar } from "@/components/BillBreakdown";
 import type { Customer, CreditPayment } from "@/lib/types";
 
 type Tab = "Collect" | "History";
@@ -76,6 +79,7 @@ function CollectTab({
   onSelect: (c: Customer | null) => void;
 }) {
   const { customers, loading } = useCustomers();
+  const { isAdmin, label } = useCustomerLabel();
   const [search, setSearch] = useState("");
 
   // Live doc, so the balance updates under the sheet as payments land.
@@ -87,10 +91,10 @@ function CollectTab({
         // Searching shows everyone, so an advance can be taken from a customer
         // who owes nothing yet.
         .filter(
-          (c) => (c.remainingCredit > 0 || c.advance > 0 || !!search.trim()) && matchesCustomerSearch(c, search),
+          (c) => (c.remainingCredit > 0 || c.advance > 0 || !!search.trim()) && matchesCustomerSearch(c, search, isAdmin),
         )
         .sort((a, b) => b.remainingCredit - a.remainingCredit),
-    [customers, search],
+    [customers, search, isAdmin],
   );
 
   const totalOwed = owing.reduce((sum, c) => sum + c.remainingCredit, 0);
@@ -112,12 +116,12 @@ function CollectTab({
       <input
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search by name or mobile"
+        placeholder={isAdmin ? "Search by name or mobile" : "Search by name"}
         className="mt-3 w-full rounded-xl border border-border bg-surface px-3.5 py-3 text-base outline-none focus:border-accent"
       />
 
       {loading ? (
-        <p className="py-8 text-center text-muted">Loading…</p>
+        <SkeletonRows label="Loading customers" />
       ) : (
         <div className="mt-3 flex flex-col gap-2">
           {owing.map((c) => (
@@ -127,10 +131,12 @@ function CollectTab({
               className="flex min-h-[72px] items-center gap-3 rounded-2xl border border-border bg-surface px-3.5 py-3 text-left"
             >
               <div className="min-w-0 flex-1">
-                <div className="truncate text-base font-bold">{c.name}</div>
-                <div className="text-xs font-medium text-muted-2">
-                  {c.mobileNumber || "No mobile"}
-                </div>
+                <div className="truncate text-base font-bold">{label(c.name)}</div>
+                {isAdmin && (
+                  <div className="text-xs font-medium text-muted-2">
+                    {c.mobileNumber || "No mobile"}
+                  </div>
+                )}
               </div>
               <div className="text-right">
                 <div className="tabular-nums text-lg font-extrabold text-warning">
@@ -158,7 +164,12 @@ function CollectTab({
 
 function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () => void }) {
   const { bills, loading } = useCustomerBills(customer.id);
+  // Every payment this customer made, so each bill can show what came off it and when.
+  const { payments } = useCreditPayments(customer.id);
+  /** The bill whose items and payments are showing. */
+  const [openBill, setOpenBill] = useState<string | null>(null);
   const { profile, user } = useAuth();
+  const { isAdmin, label } = useCustomerLabel();
   const { settings } = useStoreSettings();
   const [amountText, setAmountText] = useState("");
   const [note, setNote] = useState("");
@@ -202,7 +213,7 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
         source: "advance",
       });
       const applied = result.allocations.reduce((sum, a) => sum + a.amount, 0);
-      const doneText = `${money(applied)} of ${customer.name}'s advance used against what they owe`;
+      const doneText = `${money(applied)} of ${label(customer.name)}'s advance used against what they owe`;
       setDone(doneText);
       if (texting) textPayment(result.id, doneText);
     } catch (err) {
@@ -226,8 +237,8 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
       });
       const doneText =
         result.advance > 0
-          ? `${money(amount)} received from ${customer.name} — ${money(result.advance)} kept as advance`
-          : `${money(amount)} received from ${customer.name}`;
+          ? `${money(amount)} received from ${label(customer.name)} — ${money(result.advance)} kept as advance`
+          : `${money(amount)} received from ${label(customer.name)}`;
       setDone(doneText);
       if (texting) textPayment(result.id, doneText);
       // The old app handed the customer a payment slip every time.
@@ -261,10 +272,12 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
       <div className="mx-auto max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-xl font-extrabold">{customer.name}</div>
-            <div className="text-sm font-medium text-muted">
-              {customer.mobileNumber || "No mobile"}
-            </div>
+            <div className="truncate text-xl font-extrabold">{label(customer.name)}</div>
+            {isAdmin && (
+              <div className="text-sm font-medium text-muted">
+                {customer.mobileNumber || "No mobile"}
+              </div>
+            )}
           </div>
           <button
             onClick={onClose}
@@ -307,30 +320,57 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
           <div className="flex flex-col gap-1.5">
             {lines.map((l) => {
               const share = preview.find((a) => a.billId === l.billId)?.amount ?? 0;
+              const bill = l.billId ? bills.find((b) => b.id === l.billId) : undefined;
+              const open = bill !== undefined && openBill === bill.id;
+              // Paid so far: cash at the till, advance at the till, and credit payments since.
+              const paid = bill ? paidSoFar(bill) : 0;
               return (
                 <div
                   key={l.billId ?? "opening"}
-                  className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 ${
-                    share > 0 ? "border-success/40 bg-success/5" : "border-border"
-                  }`}
+                  className={`rounded-xl border ${share > 0 ? "border-success/40 bg-success/5" : "border-border"}`}
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-bold">{l.label}</div>
-                    {l.createdAt > 0 && (
-                      <div className="text-[11px] font-medium text-muted-2">
-                        {dateAndTime(l.createdAt)}
+                  <button
+                    type="button"
+                    disabled={!bill}
+                    onClick={() => setOpenBill(open ? null : (bill?.id ?? null))}
+                    aria-expanded={open}
+                    className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left disabled:cursor-default"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-bold">{l.label}</div>
+                      {l.createdAt > 0 && (
+                        <div className="text-[11px] font-medium text-muted-2">
+                          {dateAndTime(l.createdAt)}
+                        </div>
+                      )}
+                      {bill && (
+                        <div className="tabular-nums text-[11px] font-semibold text-muted">
+                          Total {money(bill.total)}
+                          {paid > 0 && (
+                            <span className="text-success"> · paid {money(paid)}</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="tabular-nums text-right">
+                      <div className="text-sm font-bold">{money(l.due)}</div>
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-muted-2">
+                        {paid > 0 ? "still due" : "due"}
                       </div>
+                      {share > 0 && (
+                        <div className="text-[11px] font-bold text-success">
+                          −{money(share)}
+                          {share >= l.due ? " · clears" : ""}
+                        </div>
+                      )}
+                    </div>
+                    {bill && (
+                      <ChevronDown
+                        className={`h-4 w-4 shrink-0 text-muted-2 transition-transform ${open ? "rotate-180" : ""}`}
+                      />
                     )}
-                  </div>
-                  <div className="tabular-nums text-right">
-                    <div className="text-sm font-bold">{money(l.due)}</div>
-                    {share > 0 && (
-                      <div className="text-[11px] font-bold text-success">
-                        −{money(share)}
-                        {share >= l.due ? " · clears" : ""}
-                      </div>
-                    )}
-                  </div>
+                  </button>
+                  {open && bill && <BillBreakdown bill={bill} payments={payments} />}
                 </div>
               );
             })}
@@ -377,9 +417,9 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
             <span className="block text-sm font-bold">{texting ? "Send SMS" : "No SMS"}</span>
             <span className="block text-[11px] font-medium text-muted-2">
               {!hasMobile
-                ? `${customer.name} has no mobile number on record`
+                ? `${label(customer.name)} has no mobile number on record`
                 : texting
-                  ? `Payment and balance left texted to ${customer.mobileNumber}`
+                  ? `Payment and balance left texted${isAdmin ? ` to ${customer.mobileNumber}` : ""}`
                   : "Payment won't be texted"}
             </span>
           </span>
@@ -389,7 +429,7 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
         {extra > 0 && (
           <p className="tabular-nums mt-2 rounded-xl bg-success/5 px-3.5 py-2.5 text-sm font-semibold text-success">
             {owed > 0 ? `Clears the ${money(owed)} owed — ` : "Nothing is owed — "}
-            {money(extra)} is kept as advance for {customer.name}.
+            {money(extra)} is kept as advance for {label(customer.name)}.
           </p>
         )}
         {error && <p className="mt-2 text-sm font-semibold text-danger">{error}</p>}
@@ -409,6 +449,7 @@ function PaymentSheet({ customer, onClose }: { customer: Customer; onClose: () =
 
 function HistoryTab() {
   const { profile } = useAuth();
+  const { label } = useCustomerLabel();
   const isAdmin = profile?.role === "admin";
 
   const [editing, setEditing] = useState<CreditPayment | null>(null);
@@ -498,7 +539,7 @@ function HistoryTab() {
       </div>
 
       {loading ? (
-        <p className="py-8 text-center text-muted">Loading…</p>
+        <SkeletonRows label="Loading payments" />
       ) : (
         <div className="mt-3 flex flex-col gap-2">
           {inRange.map((p) => (
@@ -507,7 +548,7 @@ function HistoryTab() {
               className="flex items-center gap-3 rounded-2xl border border-border bg-surface px-3.5 py-3"
             >
               <div className="min-w-0 flex-1">
-                <div className="truncate text-base font-bold">{p.customerName}</div>
+                <div className="truncate text-base font-bold">{label(p.customerName)}</div>
                 <div className="text-xs font-medium text-muted-2">
                   {dateAndTime(p.createdAt)} · {describePayment(p)}
                 </div>
@@ -552,7 +593,7 @@ function HistoryTab() {
           <div className="mx-auto w-full max-w-sm rounded-t-3xl bg-surface p-5 sm:rounded-3xl">
             <h3 className="text-lg font-extrabold">Delete this payment?</h3>
             <p className="mt-1.5 text-sm font-medium text-muted">
-              {money(deleting.amount)} from {deleting.customerName} on {dateAndTime(deleting.createdAt)}.
+              {money(deleting.amount)} from {label(deleting.customerName)} on {dateAndTime(deleting.createdAt)}.
               The amount goes back onto their balance. This cannot be undone.
             </p>
             {deleteError && (
@@ -585,6 +626,7 @@ function HistoryTab() {
 
 /** Change a payment's amount and/or note — reallocates it fresh, oldest outstanding first. */
 function EditPaymentSheet({ payment, onClose }: { payment: CreditPayment; onClose: () => void }) {
+  const { label } = useCustomerLabel();
   const [amountText, setAmountText] = useState(String(payment.amount));
   const [note, setNote] = useState(payment.note ?? "");
   const [saving, setSaving] = useState(false);
@@ -610,7 +652,7 @@ function EditPaymentSheet({ payment, onClose }: { payment: CreditPayment; onClos
       <div className="mx-auto w-full max-w-lg rounded-t-3xl bg-surface p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-xl font-extrabold">{payment.customerName}</div>
+            <div className="truncate text-xl font-extrabold">{label(payment.customerName)}</div>
             <div className="text-sm font-medium text-muted">{dateAndTime(payment.createdAt)}</div>
           </div>
           <button

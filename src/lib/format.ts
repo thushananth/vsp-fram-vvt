@@ -39,3 +39,9 @@ export function localDateKey(ms: number = Date.now()): string {
 export function todayKey(): string {
   return localDateKey();
 }
+
+/** "06 Nov 2026" — for dates that may be in another year. */
+export function dateWithYear(ms: number): string {
+  if (!ms) return "—";
+  return new Date(ms).toLocaleDateString("en-LK", { day: "2-digit", month: "short", year: "numeric" });
+}

@@ -4,15 +4,16 @@ import { Delete } from "lucide-react";
 
 export type PadKey = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "." | "back" | "clear";
 
-const KEYS: PadKey[] = ["7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "back"];
-/** A phone's dial pad — 1 on top — for typing mobile numbers. Clear sits where "*" would be. */
+/** 1 on top, like a phone — the shop types on phones and tablets, not calculators. */
+const KEYS: PadKey[] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "back"];
+/** A phone's dial pad for mobile numbers: no decimal point, so Clear sits where "*" would be. */
 const PHONE_KEYS: PadKey[] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "clear", "0", "back"];
 
 /**
  * An on-screen number pad. The till's fields are display boxes rather than
  * inputs, so a tablet never throws its own keyboard over half the sheet.
- * `layout="phone"` lays it out like a phone's dial pad, for mobile numbers;
- * amounts keep the calculator layout, 7 8 9 on top.
+ * Both layouts put 1 2 3 on top. `layout="phone"` is for mobile numbers: it
+ * drops the decimal point and puts Clear in that corner instead of a bar.
  */
 export default function NumPad({
   onKey,

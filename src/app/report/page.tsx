@@ -1,5 +1,6 @@
 "use client";
 
+import { useCustomerLabel } from "@/lib/customerName";
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { FileDown, FileText, Lock } from "lucide-react";
@@ -52,6 +53,7 @@ export default function ReportPage() {
   const { can, loading: canLoading } = useCan();
   const today = todayKey();
   const { customers } = useCustomers();
+  const { label } = useCustomerLabel();
   const { products } = useProducts({ includeInactive: true });
   const { categories } = useCategories();
   const { users } = useUsers();
@@ -280,7 +282,7 @@ export default function ReportPage() {
                     .map((p) => (
                       <div key={p.id} className="flex items-center justify-between gap-3 border-b border-[#f1f5f9] px-4 py-2.5 last:border-0">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-bold">{p.customerName}</div>
+                          <div className="truncate text-sm font-bold">{label(p.customerName)}</div>
                           <div className="text-[11px] font-medium text-muted">{dateAndTime(p.createdAt)}</div>
                         </div>
                         <span className="tabular-nums text-sm font-extrabold text-success">{money(p.amount)}</span>
@@ -363,7 +365,7 @@ export default function ReportPage() {
                 report.outstanding.map((o) => (
                   <div key={o.customerId} className="flex items-center gap-3 border-b border-[#f1f5f9] px-4 py-2.5 last:border-0">
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-bold">{o.name}</div>
+                      <div className="truncate text-sm font-bold">{label(o.name)}</div>
                       <div className="text-[11px] font-medium text-muted">
                         {o.lastPaymentAt
                           ? `Last paid ${money(o.lastPaymentAmount ?? 0)} on ${localDateKey(o.lastPaymentAt)}`

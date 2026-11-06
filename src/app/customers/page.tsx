@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useCustomers, matchesCustomerSearch } from "@/lib/firestore/customers";
 import CustomerSheet from "@/components/CustomerSheet";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import { useCustomerBills } from "@/lib/firestore/bills";
 import { useCreditPayments, describePayment } from "@/lib/firestore/credit";
 import { useAuth } from "@/lib/auth";
+import { useCustomerLabel } from "@/lib/customerName";
 import { useCan } from "@/lib/firestore/permissions";
 import { dateAndTime, money } from "@/lib/format";
 import { normalizeMobile, reminderPreview, sendReminderSms } from "@/lib/sms";
@@ -28,11 +31,20 @@ export default function CustomersPage() {
   }, [notice]);
 
   const isAdmin = profile?.role === "admin";
+  const { label } = useCustomerLabel();
   const { can } = useCan();
+  const router = useRouter();
+
+  /** The customer's full page (balance, every bill, payments) when this user may see
+   *  customer reports; otherwise the short history sheet. */
+  function openCustomer(c: Customer) {
+    if (can("customerReports")) router.push(`/report/customer?id=${encodeURIComponent(c.id)}`);
+    else setViewing(c);
+  }
 
   const rows = useMemo(
-    () => customers.filter((c) => matchesCustomerSearch(c, search)),
-    [customers, search],
+    () => customers.filter((c) => matchesCustomerSearch(c, search, isAdmin)),
+    [customers, search, isAdmin],
   );
 
   const owing = customers.filter((c) => c.remainingCredit > 0);
@@ -73,12 +85,12 @@ export default function CustomersPage() {
       <input
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search by name or mobile"
+        placeholder={isAdmin ? "Search by name or mobile" : "Search by name"}
         className="mt-3 w-full rounded-xl border border-border bg-surface px-3.5 py-3 text-base outline-none focus:border-accent"
       />
 
       {loading ? (
-        <p className="py-8 text-center text-muted">Loading…</p>
+        <SkeletonRows label="Loading customers" />
       ) : (
         <div className="mt-3 flex flex-col gap-2">
           {rows.map((c) => (
@@ -86,16 +98,18 @@ export default function CustomersPage() {
               key={c.id}
               className="flex min-h-[72px] items-center gap-2 rounded-2xl border border-border bg-surface px-3.5 py-3"
             >
-              <button onClick={() => setViewing(c)} className="min-w-0 flex-1 text-left">
+              <button onClick={() => openCustomer(c)} className="min-w-0 flex-1 text-left">
                 <div className="flex items-center gap-2">
-                  <span className="truncate text-base font-bold">{c.name}</span>
+                  <span className="truncate text-base font-bold">{label(c.name)}</span>
                   <span className="shrink-0 rounded-md bg-ground px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-muted">
                     {c.type}
                   </span>
                 </div>
-                <div className="text-xs font-medium text-muted-2">
-                  {c.mobileNumber || "No mobile"}
-                </div>
+                {isAdmin && (
+                  <div className="text-xs font-medium text-muted-2">
+                    {c.mobileNumber || "No mobile"}
+                  </div>
+                )}
               </button>
               <div className="shrink-0 text-right">
                 <div
@@ -113,7 +127,7 @@ export default function CustomersPage() {
               {c.remainingCredit > 0 && normalizeMobile(c.mobileNumber) && (
                 <button
                   onClick={() => setReminding(c)}
-                  aria-label={`Send ${c.name} a balance reminder`}
+                  aria-label={`Send ${label(c.name)} a balance reminder`}
                   title={c.lastReminderAt ? `Last reminded ${dateAndTime(c.lastReminderAt)}` : "Send a balance reminder SMS"}
                   className="flex shrink-0 items-center gap-1 rounded-lg border border-accent/40 bg-accent/5 px-2.5 py-2 text-[11px] font-bold text-accent"
                 >
@@ -156,6 +170,7 @@ export default function CustomersPage() {
       {reminding && (
         <ReminderConfirm
           customer={reminding}
+          isAdmin={isAdmin}
           onClose={() => setReminding(null)}
           onDone={(n) => {
             setReminding(null);
@@ -164,11 +179,11 @@ export default function CustomersPage() {
         />
       )}
 
-      {viewing && <CustomerHistorySheet customer={viewing} onClose={() => setViewing(null)} />}
+      {viewing && <CustomerHistorySheet customer={viewing} isAdmin={isAdmin} onClose={() => setViewing(null)} />}
 
       {creating && <CustomerSheet onClose={() => setCreating(false)} />}
       {editing && (
-        <CustomerSheet customer={editing} canDelete={isAdmin} onClose={() => setEditing(null)} />
+        <CustomerSheet customer={editing} canDelete={isAdmin} canViewMobile={isAdmin} onClose={() => setEditing(null)} />
       )}
     </div>
   );
@@ -177,13 +192,16 @@ export default function CustomersPage() {
 /** Shows the exact text before it goes out — a reminder costs credit and can't be taken back. */
 function ReminderConfirm({
   customer,
+  isAdmin,
   onClose,
   onDone,
 }: {
   customer: Customer;
+  isAdmin: boolean;
   onClose: () => void;
   onDone: (notice: { ok: boolean; text: string }) => void;
 }) {
+  const { label } = useCustomerLabel();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -192,7 +210,7 @@ function ReminderConfirm({
     setError(null);
     try {
       await sendReminderSms({ customerId: customer.id });
-      onDone({ ok: true, text: `Reminder sent to ${customer.name}` });
+      onDone({ ok: true, text: `Reminder sent to ${label(customer.name)}` });
     } catch (err) {
       // Kept in the sheet so the cashier sees why, e.g. "already reminded".
       setError((err as Error).message);
@@ -203,13 +221,13 @@ function ReminderConfirm({
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-ink/60 p-4">
       <div className="w-full max-w-sm rounded-3xl bg-surface p-5">
-        <h3 className="text-xl font-extrabold">Remind {customer.name}?</h3>
+        <h3 className="text-xl font-extrabold">Remind {label(customer.name)}?</h3>
         <p className="mt-1.5 text-sm font-medium leading-relaxed text-muted">
-          SMS to {customer.mobileNumber}
+          {isAdmin ? `SMS to ${customer.mobileNumber}` : "SMS reminder"}
           {customer.lastReminderAt > 0 && <> · last reminded {dateAndTime(customer.lastReminderAt)}</>}
         </p>
         <p className="mt-3 whitespace-pre-wrap rounded-xl bg-ground px-3.5 py-3 text-sm font-medium">
-          {reminderPreview(customer.name, customer.remainingCredit, customer.autoNamed)}
+          {reminderPreview(label(customer.name), customer.remainingCredit, customer.autoNamed)}
         </p>
         {error && (
           <p role="alert" className="mt-3 rounded-xl border border-danger/30 bg-danger/10 px-3.5 py-2.5 text-sm font-bold text-danger">
@@ -237,7 +255,16 @@ function ReminderConfirm({
 }
 
 /** One customer's statement: what they owe, their bills, their payments. */
-function CustomerHistorySheet({ customer, onClose }: { customer: Customer; onClose: () => void }) {
+function CustomerHistorySheet({
+  customer,
+  isAdmin,
+  onClose,
+}: {
+  customer: Customer;
+  isAdmin: boolean;
+  onClose: () => void;
+}) {
+  const { label } = useCustomerLabel();
   const { bills, loading: billsLoading } = useCustomerBills(customer.id);
   const { payments, loading: paymentsLoading } = useCreditPayments(customer.id);
 
@@ -248,9 +275,10 @@ function CustomerHistorySheet({ customer, onClose }: { customer: Customer; onClo
       <div className="mx-auto max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-xl font-extrabold">{customer.name}</div>
+            <div className="truncate text-xl font-extrabold">{label(customer.name)}</div>
             <div className="text-sm font-medium text-muted">
-              {customer.mobileNumber || "No mobile"} · {customer.type}
+              {isAdmin ? `${customer.mobileNumber || "No mobile"} · ` : ""}
+              {customer.type}
             </div>
           </div>
           <button

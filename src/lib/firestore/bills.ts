@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   collection,
   doc,
@@ -16,6 +15,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { useLive } from "@/lib/firestore/live";
 import { takeBillNo, topUpLeaseIfLow } from "@/lib/billNumbers";
 import { clearEntry, markFailed, recordPending, type JournalEntry } from "@/lib/billJournal";
 import { requireServer } from "@/lib/requireServer";
@@ -326,6 +326,8 @@ function toBill(id: string, data: Record<string, unknown>, pending: boolean): Bi
   };
 }
 
+const NO_BILLS: Bill[] = [];
+
 /** A time window, as resolveRange gives it: from startMs up to (not incl.) endMs. */
 export interface MsRange {
   startMs: number;
@@ -338,15 +340,14 @@ export interface MsRange {
  * screen that shows a date range must ask for that range, not the whole history.
  */
 export function useBills(range?: MsRange): { bills: Bill[]; loading: boolean } {
-  const [bills, setBills] = useState<Bill[]>([]);
-  const [loading, setLoading] = useState(true);
   const startMs = range?.startMs;
   const endMs = range?.endMs;
-
-  useEffect(() => {
-    // Range on the one field it is ordered by — no composite index needed.
-    const q =
-      startMs !== undefined && endMs !== undefined
+  const ranged = startMs !== undefined && endMs !== undefined;
+  const { data, loading } = useLive<Bill[]>(
+    ranged ? `bills:range:${startMs}-${endMs}:meta` : "bills:all:meta",
+    (emit, fail) => {
+      // Range on the one field it is ordered by — no composite index needed.
+      const q = ranged
         ? query(
             collection(db, "bills"),
             where("createdAt", ">=", Timestamp.fromMillis(startMs)),
@@ -354,20 +355,17 @@ export function useBills(range?: MsRange): { bills: Bill[]; loading: boolean } {
             orderBy("createdAt", "desc"),
           )
         : query(collection(db, "bills"), orderBy("createdAt", "desc"));
-    // Without includeMetadataChanges the listener never re-fires when a queued
-    // write is acknowledged, so the "Queued" badge would never clear.
-    return onSnapshot(
-      q,
-      { includeMetadataChanges: true },
-      (snap) => {
-        setBills(snap.docs.map((d) => toBill(d.id, d.data(), d.metadata.hasPendingWrites)));
-        setLoading(false);
-      },
-      () => setLoading(false),
-    );
-  }, [startMs, endMs]);
-
-  return { bills, loading };
+      // Without includeMetadataChanges the listener never re-fires when a queued
+      // write is acknowledged, so the "Queued" badge would never clear.
+      return onSnapshot(
+        q,
+        { includeMetadataChanges: true },
+        (snap) => emit(snap.docs.map((d) => toBill(d.id, d.data(), d.metadata.hasPendingWrites))),
+        fail,
+      );
+    },
+  );
+  return { bills: data ?? NO_BILLS, loading };
 }
 
 /** Every bill for one customer, newest first — their statement. */
@@ -375,36 +373,20 @@ export function useCustomerBills(customerId: string | null): {
   bills: Bill[];
   loading: boolean;
 } {
-  const [bills, setBills] = useState<Bill[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!customerId) {
-      setBills([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
+  const { data, loading } = useLive<Bill[]>(customerId ? `bills:customer:${customerId}:meta` : null, (emit, fail) =>
     // Single-field filter, sorted client-side: an orderBy here would need a
     // composite index, and one customer's bills are few enough to sort in JS.
-    const q = query(collection(db, "bills"), where("customerId", "==", customerId));
-    return onSnapshot(
-      q,
+    onSnapshot(
+      query(collection(db, "bills"), where("customerId", "==", customerId)),
       { includeMetadataChanges: true },
-      (snap) => {
-        setBills(
+      (snap) =>
+        emit(
           snap.docs
             .map((d) => toBill(d.id, d.data(), d.metadata.hasPendingWrites))
             .sort((a, b) => b.createdAt - a.createdAt),
-        );
-        setLoading(false);
-      },
-      (err) => {
-        console.error("customer bills snapshot error", err);
-        setLoading(false);
-      },
-    );
-  }, [customerId]);
-
-  return { bills, loading };
+        ),
+      fail,
+    ),
+  );
+  return { bills: data ?? NO_BILLS, loading };
 }

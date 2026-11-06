@@ -5,6 +5,7 @@ import { lineAmount } from "@/lib/billLines";
 import { ChevronLeft, ChevronRight, Download, Search, X } from "lucide-react";
 import { useBills, voidBill, retryJournalledBill } from "@/lib/firestore/bills";
 import { useAuth } from "@/lib/auth";
+import { useCustomerLabel } from "@/lib/customerName";
 import { usePermissions } from "@/lib/firestore/permissions";
 import { printTickets } from "@/lib/printer";
 import { billTickets, needsCounterCopy } from "@/lib/receipts";
@@ -13,11 +14,12 @@ import { useProducts } from "@/lib/firestore/products";
 import { useCategories } from "@/lib/firestore/categories";
 import { useStoreSettings } from "@/lib/firestore/settings";
 import { useUsers } from "@/lib/firestore/users";
-import { useCustomers } from "@/lib/firestore/customers";
+import { useCustomers, isNumberName } from "@/lib/firestore/customers";
 import { money, dateAndTime, todayKey } from "@/lib/format";
 import { useBillJournal, type JournalEntry } from "@/lib/billJournal";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
 import Stat from "@/components/ui/Stat";
+import { SkeletonRows } from "@/components/ui/Skeleton";
 import {
   billToExportable,
   exportBillsCsv,
@@ -42,6 +44,7 @@ const PAGE_SIZES = [25, 50, 100] as const;
 export default function BillsPage() {
   const today = todayKey();
   const { profile } = useAuth();
+  const { isAdmin, label } = useCustomerLabel();
   const { permissions } = usePermissions();
   const { products } = useProducts({ includeInactive: true });
   const { categories } = useCategories();
@@ -99,11 +102,11 @@ export default function BillsPage() {
       rows = rows.filter(
         (b) =>
           String(b.no).includes(needle) ||
-          (b.customerName ?? "").toLowerCase().includes(needle),
+          ((isAdmin || !isNumberName(b.customerName ?? "")) && (b.customerName ?? "").toLowerCase().includes(needle)),
       );
     }
     return rows;
-  }, [bills, inRange, filter, search]);
+  }, [bills, inRange, filter, search, isAdmin]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pageCount);
@@ -189,7 +192,10 @@ export default function BillsPage() {
     void downloadBillPdf(bill, {
       unitOf,
       cashierName: cashierName(bill.cashierId),
-      customerMobile: customers.find((c) => c.id === bill.customerId)?.mobileNumber || undefined,
+      customerMobile:
+        profile?.role === "admin"
+          ? customers.find((c) => c.id === bill.customerId)?.mobileNumber || undefined
+          : undefined,
       customerCredit: customers.find((c) => c.id === bill.customerId)?.remainingCredit,
     });
   }
@@ -370,7 +376,7 @@ export default function BillsPage() {
       )}
 
       {loading ? (
-        <p className="py-8 text-center text-muted">Loading bills…</p>
+        <SkeletonRows label="Loading bills" />
       ) : filtered.length === 0 ? (
         <p className="py-8 text-center text-muted">
           {search ? `Nothing matches “${search.trim()}”.` : "No bills in this range."}
@@ -391,7 +397,7 @@ export default function BillsPage() {
                     <span className="tabular-nums text-base font-bold">#{b.no}</span>
                     {b.customerName && (
                       <span className="truncate text-xs font-semibold text-muted">
-                        {b.customerName}
+                        {label(b.customerName)}
                       </span>
                     )}
                   </div>
@@ -581,6 +587,7 @@ function BillDetail({
   onPdf: () => void;
   onClose?: () => void;
 }) {
+  const { label } = useCustomerLabel();
   return (
     <>
       <div className="flex items-start justify-between gap-3">
@@ -593,7 +600,7 @@ function BillDetail({
             {dateAndTime(bill.createdAt)}
           </div>
           {bill.customerName && (
-            <div className="mt-1 text-sm font-bold">{bill.customerName}</div>
+            <div className="mt-1 text-sm font-bold">{label(bill.customerName)}</div>
           )}
         </div>
         {onClose && (

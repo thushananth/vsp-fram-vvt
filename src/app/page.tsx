@@ -2,15 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
+import { useCustomerLabel } from "@/lib/customerName";
 import { useProducts } from "@/lib/firestore/products";
-import { useCan, usePermissions } from "@/lib/firestore/permissions";
-import { createBill, linkBillToCustomer, type CreatedBill } from "@/lib/firestore/bills";
-import { useCustomers, matchesCustomerSearch, startCreateCustomer } from "@/lib/firestore/customers";
+import { usePermissions } from "@/lib/firestore/permissions";
+import { createBill, type CreatedBill } from "@/lib/firestore/bills";
 import { useStoreSettings } from "@/lib/firestore/settings";
 import { useCategories } from "@/lib/firestore/categories";
 import { ArrowUpDown, LayoutGrid, List, MessageSquare, Pencil, Printer, Search, ShoppingBasket, Trash2, X } from "lucide-react";
-import CustomerSheet from "@/components/CustomerSheet";
+import CustomerStart from "@/components/CustomerStart";
 import ProductThumb from "@/components/ui/ProductThumb";
+import { SkeletonTiles } from "@/components/ui/Skeleton";
 import SwitchTrack from "@/components/ui/SwitchTrack";
 import NumPad, { applyKey, type PadKey } from "@/components/ui/NumPad";
 import LineSheet, { type LineEdit } from "@/components/LineSheet";
@@ -19,7 +20,7 @@ import { lineAmount, round2, round3 } from "@/lib/billLines";
 import { printTickets, usePrinter } from "@/lib/printer";
 import { billTickets, needsCounterCopy, testTicket } from "@/lib/receipts";
 import { money } from "@/lib/format";
-import { localMobile, normalizeMobile, sendBillSms } from "@/lib/sms";
+import { normalizeMobile, sendBillSms } from "@/lib/sms";
 import type { Bill, BillLine, Customer, PaymentType, Product } from "@/lib/types";
 
 interface Payment {
@@ -66,8 +67,11 @@ export default function BillingPage() {
   const [printThis, setPrintThis] = useState<boolean | null>(null);
   /** This bill only: null follows the store's SMS setting, true/false overrides it. */
   const [smsThis, setSmsThis] = useState<boolean | null>(null);
-  /** A walk-in sale just charged, waiting on the cashier for a mobile (or Skip). */
-  const [walkInAsk, setWalkInAsk] = useState<{ bill: CreatedBill; sms: boolean } | null>(null);
+  /**
+   * Every bill starts on the customer screen (Walk-in preselected); picking
+   * someone, or tapping Walk-in, moves on to the items. Charging comes back.
+   */
+  const [onItems, setOnItems] = useState(false);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -88,8 +92,14 @@ export default function BillingPage() {
     return () => window.clearTimeout(t);
   }, [confirmation]);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  /** The customer screen opened again from a bill being built — the basket stays. */
   const [pickingCustomer, setPickingCustomer] = useState(false);
   const [editingLine, setEditingLine] = useState<string | null>(null);
+  /**
+   * The line a product tap just added, until its sheet is confirmed with Done.
+   * Closing the sheet instead (X, backdrop, Escape) takes it back off the bill.
+   */
+  const freshLineRef = useRef<string | null>(null);
   const [basketOpen, setBasketOpen] = useState(false);
   /** Why a charge was refused. Shown inside the basket, not as the bottom
    *  toast — the basket sheet covers that, so the cashier would never see it. */
@@ -104,6 +114,7 @@ export default function BillingPage() {
   /** Admin dragging tiles into the order the till shows them. */
   const [arranging, setArranging] = useState(false);
   const isAdmin = profile?.role === "admin";
+  const { label: customerLabel } = useCustomerLabel();
 
   // Its own permission, not the Stock one: a shop may well want a cashier to
   // discount a bun for a regular without letting them reprice the product.
@@ -152,9 +163,9 @@ export default function BillingPage() {
       ? shortfall
       : 0;
   const printing = printThis ?? settings.printBills;
-  /** A customer's bill can be texted only with a mobile on record; a walk-in's
-   *  only if the till is going to ask them for one. */
-  const smsPossible = customer ? normalizeMobile(customer.mobileNumber) !== null : settings.askWalkInMobile;
+  /** A bill can be texted only to a customer with a mobile on record. A walk-in
+   *  who wants an SMS is added as a customer on the first screen. */
+  const smsPossible = customer ? normalizeMobile(customer.mobileNumber) !== null : false;
   const texting = smsPossible && (smsThis ?? settings.sendBillSms);
   const unitOf = (productId: string) => products.find((p) => p.id === productId)?.unit ?? "";
   const counterCopyDue =
@@ -193,7 +204,7 @@ export default function BillingPage() {
   // The search box is not focused on load — on a phone that would throw the
   // keyboard up uninvited. A barcode scanner (or a desk keyboard) still lands
   // in it: the first key typed with nothing focused moves into the box.
-  const sheetOpen = basketOpen || editingLine !== null || pickingCustomer || arranging || walkInAsk !== null;
+  const sheetOpen = basketOpen || editingLine !== null || pickingCustomer || arranging || !onItems;
   useEffect(() => {
     if (sheetOpen) return;
     function onKeyDown(e: KeyboardEvent) {
@@ -238,7 +249,37 @@ export default function BillingPage() {
    * modal on every beep would make scanning unusable.
    */
   function pickProduct(p: Product) {
-    setEditingLine(addToCart(p));
+    const key = addToCart(p);
+    freshLineRef.current = key;
+    setEditingLine(key);
+  }
+
+  /** The line sheet closed without Done: a product just tapped in is not wanted. */
+  function closeLineSheet() {
+    const fresh = freshLineRef.current;
+    freshLineRef.current = null;
+    if (fresh !== null && fresh === editingLine) removeLine(fresh);
+    else setEditingLine(null);
+  }
+
+  /** Who the bill is for — from the start screen, or changed mid-bill. */
+  function chooseCustomer(c: Customer | null) {
+    setCustomer(c);
+    setUseAdvance(true);
+    setChargeError(null);
+    setPickingCustomer(false);
+    setOnItems(true);
+  }
+
+  /** A barcode scanned on the customer screen: start (or carry on) the bill with it. */
+  function scanOnCustomerScreen(code: string): boolean {
+    const p = products.find((x) => x.barcode === code);
+    if (!p) return false;
+    if (!pickingCustomer) setCustomer(null);
+    setPickingCustomer(false);
+    setOnItems(true);
+    addToCart(p);
+    return true;
   }
 
   function setQty(key: string, rawQty: number) {
@@ -408,22 +449,19 @@ export default function BillingPage() {
       // the message when the acknowledgement (or the timeout) arrives.
       setConfirmation(
         due > 0
-          ? `Bill #${result.no} saved — ${soldTo!.name} owes ${money(due)}`
+          ? `Bill #${result.no} saved — ${customerLabel(soldTo!.name)} owes ${money(due)}`
           : advance > 0
-            ? `Bill #${result.no} saved — ${money(advance)} taken from ${soldTo!.name}'s advance`
+            ? `Bill #${result.no} saved — ${money(advance)} taken from ${customerLabel(soldTo!.name)}'s advance`
             : `Bill #${result.no} saved`,
       );
       trackSync(result);
-      if (soldTo) {
-        if (shouldText) textBill(result);
-      } else if (settings.askWalkInMobile) {
-        setWalkInAsk({ bill: result, sms: shouldText });
-      }
+      if (soldTo && shouldText) textBill(result);
       setCart([]);
       setTender(null);
       setTenderText(null);
       setPayPad(null);
       setCustomer(null);
+      setOnItems(false);
       setUseAdvance(true);
       setEditingLine(null);
       setBasketOpen(false);
@@ -571,6 +609,52 @@ export default function BillingPage() {
         )}
       </div>
 
+      {!onItems || pickingCustomer ? (
+        <CustomerStart
+          selectedId={customer?.id ?? null}
+          changing={onItems}
+          cartCount={cartCount}
+          onPick={chooseCustomer}
+          onBack={() => setPickingCustomer(false)}
+          onScan={scanOnCustomerScreen}
+          onError={setConfirmation}
+        />
+      ) : (
+      <>
+      {/* Who this bill is for, always in sight. Tapping it changes the
+          customer; the basket stays as it is. */}
+      <button
+        onClick={() => setPickingCustomer(true)}
+        className={`flex w-full items-center gap-3 rounded-2xl border bg-surface px-3.5 py-2.5 text-left ${
+          customer ? "border-border" : "border-dashed border-muted-2"
+        }`}
+      >
+        <span
+          className={`flex h-10 w-10 shrink-0 items-center justify-center border border-border bg-ground font-extrabold text-muted ${
+            customer?.type === "shop" ? "rounded-full" : "rounded-xl"
+          }`}
+        >
+          {customer ? (customerLabel(customer.name).trim()[0] ?? "?").toUpperCase() : "W"}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[10px] font-extrabold uppercase tracking-wider text-muted-2">Bill for</span>
+          <span className="block truncate text-lg font-extrabold">
+            {customer ? customerLabel(customer.name) : "Walk-in"}
+          </span>
+        </span>
+        {customer && customer.remainingCredit > 0 && (
+          <span className="tabular-nums shrink-0 rounded-md bg-warning/10 px-1.5 py-0.5 text-[11px] font-extrabold text-warning">
+            owes {customer.remainingCredit.toFixed(0)}
+          </span>
+        )}
+        {customer && customer.advance > 0 && (
+          <span className="tabular-nums shrink-0 rounded-md bg-success/10 px-1.5 py-0.5 text-[11px] font-extrabold text-success">
+            advance {customer.advance.toFixed(0)}
+          </span>
+        )}
+        <span className="shrink-0 text-sm font-extrabold text-accent">Change</span>
+      </button>
+
       <form onSubmit={handleSearchSubmit} className="relative">
         <Search className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-muted-2" />
         <input
@@ -658,7 +742,7 @@ export default function BillingPage() {
           }}
         />
       ) : loading ? (
-        <p className="py-8 text-center text-muted">Loading products…</p>
+        <SkeletonTiles />
       ) : (
         <div
           className={
@@ -755,8 +839,11 @@ export default function BillingPage() {
               </button>
             </div>
             <div className="flex flex-col gap-3">
-              {cart.map((l) => (
-                <div key={l.key} className="rounded-2xl border border-border p-2.5">
+              {/* The lines scroll on their own, newest first, so a long bill
+                  never pushes Total and Charge off the screen. */}
+              <div className="-mx-1 flex max-h-[38vh] min-h-[96px] flex-col gap-2 overflow-y-auto overscroll-contain px-1">
+              {[...cart].reverse().map((l) => (
+                <div key={l.key} className="shrink-0 rounded-2xl border border-border p-2">
                   {/* Tapping the item opens its sheet too — Edit is there for
                       anyone who doesn't know that. */}
                   <button
@@ -783,7 +870,7 @@ export default function BillingPage() {
                       {money(lineAmount(l))}
                     </span>
                   </button>
-                  <div className="mt-2 flex items-center gap-2">
+                  <div className="mt-1.5 flex items-center gap-2">
                     <button
                       onClick={() => setQty(l.key, l.qty - 1)}
                       aria-label={`One less ${l.name}`}
@@ -819,6 +906,7 @@ export default function BillingPage() {
                   </div>
                 </div>
               ))}
+              </div>
 
               <div className="flex items-center justify-between border-t border-border pt-3 text-lg font-extrabold">
                 <span>Total</span>
@@ -838,14 +926,18 @@ export default function BillingPage() {
               )}
 
             <button
-              onClick={() => setPickingCustomer(true)}
+              onClick={() => {
+                setBasketOpen(false);
+                setPayPad(null);
+                setPickingCustomer(true);
+              }}
               className="flex items-center justify-between rounded-xl border border-border bg-ground px-3.5 py-2.5 text-left"
             >
               <span className="text-xs font-bold uppercase tracking-wider text-muted-2">
                 Customer
               </span>
               <span className="flex items-center gap-2 text-sm font-bold">
-                {customer ? customer.name : "Walk-in"}
+                {customer ? customerLabel(customer.name) : "Walk-in"}
                 {customer && customer.remainingCredit > 0 && (
                   <span className="tabular-nums rounded-md bg-warning/10 px-1.5 py-0.5 text-[10px] font-bold text-warning">
                     owes {customer.remainingCredit.toFixed(0)}
@@ -987,11 +1079,11 @@ export default function BillingPage() {
                 <span className="block text-[11px] font-medium text-muted-2">
                   {!smsPossible
                     ? customer
-                      ? `${customer.name} has no mobile number on record`
+                      ? `${customerLabel(customer.name)} has no mobile number on record`
                       : "Walk-in mobile prompt is off in Settings"
                     : texting
                       ? customer
-                        ? `Bill texted to ${customer.mobileNumber}`
+                        ? `Bill texted${isAdmin ? ` to ${customer.mobileNumber}` : ""}`
                         : "Bill texted to the number the walk-in gives"
                       : "Bill won't be texted"}
                 </span>
@@ -1034,6 +1126,9 @@ export default function BillingPage() {
         </div>
       )}
 
+      </>
+      )}
+
       {line && (
         <LineSheet
           key={line.key}
@@ -1041,15 +1136,18 @@ export default function BillingPage() {
           unit={unitOf(line.productId)}
           imageUrl={products.find((p) => p.id === line.productId)?.imageUrl ?? null}
           canEditPrice={canEditPrices}
-          onApply={(edit) => applyLine(line.key, edit)}
           onRemove={() => removeLine(line.key)}
-          onClose={() => setEditingLine(null)}
+          onApply={(edit) => {
+            freshLineRef.current = null;
+            applyLine(line.key, edit);
+          }}
+          onClose={closeLineSheet}
         />
       )}
 
       {confirmingShort !== null && customer && (
         <ShortPaymentConfirm
-          customerName={customer.name}
+          customerName={customerLabel(customer.name)}
           total={total}
           advanceUsed={advanceUsed}
           paid={confirmingShort}
@@ -1068,7 +1166,7 @@ export default function BillingPage() {
 
       {confirmingAdvance && customer && (
         <AdvanceConfirm
-          customerName={customer.name}
+          customerName={customerLabel(customer.name)}
           total={total}
           advanceUsed={advanceUsed}
           advanceHeld={customer.advance}
@@ -1082,51 +1180,6 @@ export default function BillingPage() {
         />
       )}
 
-      {walkInAsk && (
-        <WalkInMobileAsk
-          billNo={walkInAsk.bill.no}
-          sms={walkInAsk.sms}
-          onSkip={() => setWalkInAsk(null)}
-          onSave={({ mobile, existing, name }) => {
-            const { bill, sms } = walkInAsk;
-            setWalkInAsk(null);
-            let owner = existing ? { id: existing.id, name: existing.name } : null;
-            if (!owner) {
-              const local = localMobile(mobile);
-              const created = startCreateCustomer({
-                name: name || local,
-                type: "person",
-                mobileNumber: local,
-                autoNamed: !name,
-              });
-              created.saved.catch((err: Error) => setConfirmation(`Customer not saved — ${err.message}`));
-              owner = { id: created.id, name: name || local };
-            }
-            // Queued after the customer, so the rules find them when it lands.
-            linkBillToCustomer(bill.id, owner).catch((err: Error) =>
-              setConfirmation(`Bill #${bill.no} not linked to ${owner.name} — ${err.message}`),
-            );
-            setConfirmation(
-              existing ? `Bill #${bill.no} added to ${owner.name}` : `Saved ${owner.name} — bill #${bill.no} added`,
-            );
-            if (sms) textBill(bill, mobile);
-          }}
-        />
-      )}
-
-      {pickingCustomer && (
-        <CustomerPicker
-          selectedId={customer?.id ?? null}
-          onPick={(c) => {
-            setCustomer(c);
-            setUseAdvance(true);
-            setChargeError(null);
-            setPickingCustomer(false);
-          }}
-          onClose={() => setPickingCustomer(false)}
-        />
-      )}
-
       {confirmation && (
         <div
           className="fixed right-4 top-4 z-50 max-w-[calc(100vw-2rem)] rounded-xl bg-ink px-4 py-3 text-sm font-semibold text-white shadow-lg sm:max-w-sm"
@@ -1137,144 +1190,6 @@ export default function BillingPage() {
           </button>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * After a walk-in sale: "your mobile number?" Saving adds them as a person
- * customer (name optional — the till is busy), or picks the customer who
- * already has that number, so they get offers and, when Send SMS was ticked,
- * this bill by text. Always skippable; turned off from Settings → SMS.
- */
-function WalkInMobileAsk({
-  billNo,
-  sms,
-  onSkip,
-  onSave,
-}: {
-  billNo: number;
-  sms: boolean;
-  onSkip: () => void;
-  onSave: (save: { mobile: string; existing: Customer | null; name: string }) => void;
-}) {
-  const { customers } = useCustomers();
-  const [digits, setDigits] = useState("");
-  const [name, setName] = useState("");
-  const mobile = normalizeMobile(digits);
-
-  // Customers whose number has what's typed so far, in the 07X… form it's typed in.
-  const withMobile = useMemo(
-    () =>
-      customers.flatMap((c) => {
-        const n = normalizeMobile(c.mobileNumber);
-        return n ? [{ customer: c, mobile: n, local: localMobile(n) }] : [];
-      }),
-    [customers],
-  );
-  const typedLocal = digits.replace(/^94/, "0");
-  const suggestions =
-    typedLocal.length >= 3 ? withMobile.filter((m) => m.local.includes(typedLocal)).slice(0, 4) : [];
-  const existing = mobile ? (withMobile.find((m) => m.mobile === mobile)?.customer ?? null) : null;
-
-  function press(key: PadKey) {
-    if (key === "clear") setDigits("");
-    else if (key === "back") setDigits((d) => d.slice(0, -1));
-    else if (key !== ".") setDigits((d) => (d.length >= 10 ? d : d + key));
-  }
-
-  function save() {
-    if (mobile) onSave({ mobile, existing, name: name.trim() });
-  }
-
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (e.key === "Escape") return onSkip();
-      if (e.key === "Enter") {
-        e.preventDefault();
-        return save();
-      }
-      // Typing a name goes into the name box, not the number.
-      if (e.target instanceof HTMLInputElement) return;
-      if (/^[0-9]$/.test(e.key)) press(e.key as PadKey);
-      else if (e.key === "Backspace") press("back");
-      else return;
-      e.preventDefault();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  });
-
-  return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-ink/60 sm:items-center sm:p-4">
-      <div className="max-h-[94vh] w-full max-w-sm overflow-y-auto rounded-t-3xl bg-surface p-5 sm:rounded-3xl">
-        <h3 className="text-xl font-extrabold">Customer&apos;s mobile?</h3>
-        <p className="mt-1 text-sm font-medium leading-relaxed text-muted">
-          Bill #{billNo} is saved.{" "}
-          {sms ? "We'll text the bill and send offers now and then." : "For offers and promotions by SMS."}
-        </p>
-
-        <div
-          className={`tabular-nums mt-3 rounded-xl border px-3.5 py-3 text-center text-2xl font-extrabold tracking-wider ${
-            digits && !mobile ? "border-warning" : mobile ? "border-success" : "border-border"
-          }`}
-        >
-          {digits || <span className="text-muted-2">07X XXX XXXX</span>}
-        </div>
-
-        {/* Suggestions as they type — a regular is one tap, never a second customer. */}
-        {suggestions.length > 0 && !existing && (
-          <div className="mt-2 flex flex-col gap-1">
-            {suggestions.map((s) => (
-              <button
-                key={s.customer.id}
-                type="button"
-                onClick={() => onSave({ mobile: s.mobile, existing: s.customer, name: "" })}
-                className="flex items-center justify-between gap-2 rounded-xl border border-border bg-ground px-3 py-2 text-left"
-              >
-                <span className="min-w-0 truncate text-sm font-bold">
-                  {s.customer.autoNamed ? "Walk-in" : s.customer.name}
-                </span>
-                <span className="tabular-nums shrink-0 text-sm font-semibold text-muted">{s.local}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {existing ? (
-          <p className="mt-2 rounded-xl bg-success/10 px-3 py-2 text-sm font-bold text-success">
-            Already a customer — {existing.autoNamed ? "walk-in" : existing.name}
-          </p>
-        ) : (
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Name (optional)"
-            className="mt-2 w-full rounded-xl border border-border bg-surface px-3.5 py-2.5 text-base outline-none focus:border-accent"
-          />
-        )}
-
-        <div className="mt-3">
-          <NumPad onKey={press} allowDecimal={false} layout="phone" />
-        </div>
-
-        <div className="mt-3 flex gap-2">
-          <button
-            onClick={onSkip}
-            className="min-h-[52px] flex-1 rounded-2xl border border-border text-base font-bold text-muted"
-          >
-            Skip
-          </button>
-          <button
-            disabled={!mobile}
-            onClick={save}
-            className="min-h-[52px] flex-[2] rounded-2xl bg-accent text-base font-bold text-white disabled:opacity-50"
-          >
-            {existing ? "Use this customer" : "Save customer"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1434,126 +1349,6 @@ function AdvanceConfirm({
             </button>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-/** Walk-in by default; search, or add a customer without leaving the till. */
-function CustomerPicker({
-  selectedId,
-  onPick,
-  onClose,
-}: {
-  selectedId: string | null;
-  onPick: (customer: Customer | null) => void;
-  onClose: () => void;
-}) {
-  const { customers, loading } = useCustomers();
-  const { can } = useCan();
-  const [search, setSearch] = useState("");
-  const [creating, setCreating] = useState(false);
-
-  const rows = useMemo(
-    () => customers.filter((c) => matchesCustomerSearch(c, search)).slice(0, 40),
-    [customers, search],
-  );
-
-  return (
-    <div className="fixed inset-0 z-30 flex items-end bg-ink/50">
-      <div className="mx-auto max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-t-3xl bg-surface p-5">
-        <div className="flex items-start justify-between gap-3">
-          <h3 className="text-xl font-extrabold">Customer</h3>
-          <button
-            onClick={onClose}
-            className="min-h-[42px] rounded-lg border border-border px-3.5 text-sm font-bold text-muted"
-          >
-            Close
-          </button>
-        </div>
-
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name or mobile"
-          className="mt-3 w-full rounded-xl border border-border bg-ground px-3.5 py-3 text-base outline-none focus:border-accent"
-        />
-
-        <button
-          onClick={() => onPick(null)}
-          className={`mt-2 flex w-full items-center justify-between rounded-xl border px-3.5 py-3 text-left ${
-            selectedId === null ? "border-accent bg-accent/5" : "border-border"
-          }`}
-        >
-          <span className="text-base font-bold">Walk-in</span>
-          <span className="text-xs font-medium text-muted-2">Cash only</span>
-        </button>
-
-        {loading ? (
-          <p className="py-6 text-center text-muted">Loading…</p>
-        ) : (
-          <div className="mt-2 flex flex-col gap-1.5">
-            {rows.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => onPick(c)}
-                className={`flex items-center gap-3 rounded-xl border px-3.5 py-3 text-left ${
-                  selectedId === c.id ? "border-accent bg-accent/5" : "border-border"
-                }`}
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-base font-bold">{c.name}</div>
-                  <div className="text-xs font-medium text-muted-2">
-                    {c.mobileNumber || "No mobile"}
-                  </div>
-                </div>
-                {c.remainingCredit > 0 && (
-                  <span className="tabular-nums shrink-0 text-sm font-bold text-warning">
-                    owes {c.remainingCredit.toFixed(0)}
-                  </span>
-                )}
-                {c.advance > 0 && (
-                  <span className="tabular-nums shrink-0 text-sm font-bold text-success">
-                    +{c.advance.toFixed(0)} adv.
-                  </span>
-                )}
-              </button>
-            ))}
-            {rows.length === 0 && (
-              <p className="py-6 text-center text-sm text-muted">No customer matches that.</p>
-            )}
-          </div>
-        )}
-
-        {can("addCustomers") && (
-          <button
-            onClick={() => setCreating(true)}
-            className="mt-3 min-h-[50px] w-full rounded-xl border border-accent text-sm font-bold text-accent"
-          >
-            + New customer
-          </button>
-        )}
-
-        {creating && (
-          <CustomerSheet
-            onClose={() => setCreating(false)}
-            onCreated={(customer) => {
-              // Pick it straight away — the snapshot hasn't landed yet, so
-              // build the customer from what we just wrote.
-              onPick({
-                ...customer,
-                remainingCredit: 0,
-                openingBalance: 0,
-                advance: 0,
-                lastReminderAt: 0,
-                autoNamed: false,
-                active: true,
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-              });
-            }}
-          />
-        )}
       </div>
     </div>
   );
