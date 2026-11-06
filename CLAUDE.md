@@ -63,6 +63,14 @@ The target is "nothing ever looks stuck":
 
 ## UI conventions (tablet first)
 
+<!-- DESIGN PATTERN: every new page, and every page being redesigned, must follow
+     docs/tablet-ui-plan.md (filled fields instead of bordered boxes, button hierarchy, segmented
+     status filter, item-type filter, portrait layouts for Billing and Bills). Read it before
+     writing any UI. Style and layout only: never change page logic as part of UI work. -->
+
+**Future pages use the design pattern in [`docs/tablet-ui-plan.md`](docs/tablet-ui-plan.md).** Read it
+before building or restyling any screen. The points below are the short version.
+
 - Design for an **800 × 1280 portrait tablet** first, then phone, then desktop.
 - Touch targets at least 44px; primary actions 48–64px. Charge is the single loudest button on Billing.
 - Use the colour tokens in `src/app/globals.css` (`ink`, `ground`, `surface`, `border`, `accent`,
