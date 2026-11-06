@@ -27,8 +27,9 @@ import {
   journalToExportable,
 } from "@/lib/exportBills";
 import type { Bill } from "@/lib/types";
+import { billLabel, billMatches } from "@/lib/orders";
 
-const FILTERS = ["All", "Paid", "Credit", "Queued"] as const;
+const FILTERS = ["All", "Paid", "Credit", "Orders", "Queued"] as const;
 type Filter = (typeof FILTERS)[number];
 
 const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [
@@ -96,12 +97,13 @@ export default function BillsPage() {
     // owing is not paid, so it belongs under Credit alone until it is settled.
     if (filter === "Paid") rows = rows.filter((b) => b.status === "paid" && b.synced && b.due <= 0);
     else if (filter === "Credit") rows = rows.filter((b) => b.paymentType === "credit");
+    else if (filter === "Orders") rows = rows.filter((b) => b.kind === "order");
 
     const needle = search.trim().toLowerCase();
     if (needle) {
       rows = rows.filter(
         (b) =>
-          String(b.no).includes(needle) ||
+          billMatches(b, needle) ||
           ((isAdmin || !isNumberName(b.customerName ?? "")) && (b.customerName ?? "").toLowerCase().includes(needle)),
       );
     }
@@ -173,7 +175,7 @@ export default function BillsPage() {
 
   function handleReprint(bill: Bill) {
     if (!canReprint) return;
-    setPrintNotice(`Printing bill #${bill.no}…`);
+    setPrintNotice(`Printing bill ${billLabel(bill)}…`);
     printTickets(
       billTickets(bill, {
         paperWidth: settings.paperWidth,
@@ -349,7 +351,7 @@ export default function BillsPage() {
                 key={entry.id}
                 className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface px-3.5 py-2.5"
               >
-                <span className="tabular-nums text-sm font-bold">#{entry.no}</span>
+                <span className="tabular-nums text-sm font-bold">{billLabel(entry)}</span>
                 <span className="tabular-nums text-xs font-medium text-muted">
                   {dateAndTime(entry.createdAt)}
                 </span>
@@ -394,7 +396,12 @@ export default function BillsPage() {
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="tabular-nums text-base font-bold">#{b.no}</span>
+                    <span className="tabular-nums text-base font-bold">{billLabel(b)}</span>
+                    {b.kind === "order" && (
+                      <span className="rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent">
+                        Order
+                      </span>
+                    )}
                     {b.customerName && (
                       <span className="truncate text-xs font-semibold text-muted">
                         {label(b.customerName)}
@@ -530,7 +537,7 @@ export default function BillsPage() {
       {confirmingVoid && (
         <div className="fixed inset-0 z-40 flex items-end justify-center bg-ink/50 sm:items-center">
           <div className="mx-auto w-full max-w-sm rounded-t-3xl bg-surface p-5 sm:rounded-3xl">
-            <h3 className="text-lg font-extrabold">Delete bill #{confirmingVoid.no}?</h3>
+            <h3 className="text-lg font-extrabold">Delete bill {billLabel(confirmingVoid)}?</h3>
             <p className="mt-1.5 text-sm font-medium text-muted">
               This marks the bill as void and cannot be undone. The receipt stays on record but no
               longer counts toward sales.
@@ -593,9 +600,9 @@ function BillDetail({
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[11px] font-bold uppercase tracking-wider text-muted-2">
-            Receipt
+            {bill.kind === "order" ? "Order bill" : "Receipt"}
           </div>
-          <div className="tabular-nums mt-0.5 text-xl font-extrabold">#{bill.no}</div>
+          <div className="tabular-nums mt-0.5 text-xl font-extrabold">{billLabel(bill)}</div>
           <div className="tabular-nums text-xs font-medium text-muted">
             {dateAndTime(bill.createdAt)}
           </div>

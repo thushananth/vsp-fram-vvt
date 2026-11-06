@@ -12,6 +12,7 @@ import {
   pdfQty,
   tableStyle,
 } from "@/lib/pdf/brand";
+import { billLabel } from "@/lib/orders";
 
 function status(bill: Bill): { label: string; color: [number, number, number] } {
   if (bill.status === "void") return { label: "VOID", color: BRAND.red };
@@ -31,7 +32,7 @@ export async function downloadBillPdf(
   const doc = new jsPDF({ unit: "mm", format: "a5" });
   const w = doc.internal.pageSize.getWidth();
   const m = 12;
-  let y = letterhead(doc, bill.paymentType === "credit" ? "Credit bill" : "Receipt", `Bill #${bill.no}`, {
+  let y = letterhead(doc, bill.paymentType === "credit" ? "Credit bill" : "Receipt", `Bill ${billLabel(bill)}`, {
     compact: true,
   });
 
@@ -43,7 +44,7 @@ export async function downloadBillPdf(
   doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(...BRAND.ink);
   doc.text(bill.customerName ?? "Walk-in customer", m, y);
   doc.setFont("helvetica", "normal").setFontSize(8.5);
-  doc.text(`No. ${bill.no}`, w / 2 + 6, y);
+  doc.text(`No. ${billLabel(bill).replace(/^#/, "")}`, w / 2 + 6, y);
   doc.setTextColor(...BRAND.muted);
   if (ctx.customerMobile) doc.text(ctx.customerMobile, m, y + 4.5);
   doc.text(pdfDateTime(bill.createdAt), w / 2 + 6, y + 4.5);
@@ -137,6 +138,6 @@ export async function downloadBillPdf(
   doc.setFont("helvetica", "normal").setFontSize(8).setTextColor(...BRAND.muted);
   doc.text(doc.splitTextToSize(`Fresh from ${SHOP_DETAILS.name}. Questions about this bill? Call ${SHOP_DETAILS.phone}.`, cardX - m - 6), m, y + 12.5);
 
-  footers(doc, `${SHOP_DETAILS.name} · Bill #${bill.no}`);
-  doc.save(`VSP_Bill_${bill.no}_${fileStamp(bill.createdAt)}.pdf`);
+  footers(doc, `${SHOP_DETAILS.name} · Bill ${billLabel(bill)}`);
+  doc.save(`VSP_Bill_${billLabel(bill).replace(/^#/, "")}_${fileStamp(bill.createdAt)}.pdf`);
 }

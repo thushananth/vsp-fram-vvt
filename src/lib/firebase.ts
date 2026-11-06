@@ -1,6 +1,7 @@
 "use client";
 
 import { type FirebaseApp, getApps, initializeApp } from "firebase/app";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
 import {
   type Firestore,
   getFirestore,
@@ -32,6 +33,42 @@ const FIRESTORE_DATABASE_ID =
 export const app: FirebaseApp = getApps().length
   ? getApps()[0]
   : initializeApp(firebaseConfig);
+
+/**
+ * App Check: proves requests come from this app in a real browser, not from a
+ * script holding a stolen password. reCAPTCHA Enterprise, score-based and
+ * invisible: the cashier never sees a challenge.
+ *
+ * The site key is public (it ships in every page). It only works on the
+ * domains listed on the key in Google Cloud (reCAPTCHA → Keys → "VSP Farm"),
+ * so App Check is started only there; on localhost it would just collect
+ * rejected tokens. Enforcement is switched on per service in the Firebase
+ * console once the App Check page shows the till's traffic as verified.
+ * Offline, token refresh fails quietly and queued writes still flush later.
+ */
+export const RECAPTCHA_SITE_KEY =
+  process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY ?? "6LfwoRMuAAAAAPDJ_7d25Yz_I_Girbr9-uQIDZUb";
+/** Keep in step with the key's allowed domains in Google Cloud. */
+const APP_CHECK_HOSTS = ["vsp-farm-web.web.app"];
+
+const globalForCheck = globalThis as typeof globalThis & { __vspAppCheck?: boolean };
+
+/**
+ * Called once from RootShell after the first render, never at import: the
+ * reCAPTCHA script adds a hidden element to <body>, and done during
+ * hydration React removes it again ("placeholder element must be an element").
+ * Firestore and Auth pick App Check up when it starts; their first requests
+ * only go out after sign-in resolves, which is later.
+ */
+export function startAppCheck(): void {
+  if (typeof window === "undefined" || globalForCheck.__vspAppCheck) return;
+  if (!RECAPTCHA_SITE_KEY || !APP_CHECK_HOSTS.includes(window.location.hostname)) return;
+  globalForCheck.__vspAppCheck = true;
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(RECAPTCHA_SITE_KEY),
+    isTokenAutoRefreshEnabled: true,
+  });
+}
 
 // Offline persistence (persistentLocalCache) must be set at construction
 // time — enableIndexedDbPersistence() has to run before any other Firestore

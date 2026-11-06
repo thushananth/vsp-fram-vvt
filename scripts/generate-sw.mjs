@@ -191,6 +191,10 @@ self.addEventListener("fetch", (event) => {
   // be intercepted — the SDK does its own offline queueing.
   if (url.origin !== self.location.origin) return;
 
+  // Same-origin API calls (Hosting → functions, e.g. /api/track) are live
+  // data: never cached, never answered from the shell.
+  if (url.pathname.startsWith("/api/")) return;
+
   if (request.mode === "navigate") {
     event.respondWith(navigate(request, url));
     return;

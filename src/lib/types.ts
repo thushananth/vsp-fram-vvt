@@ -92,6 +92,11 @@ export interface Bill {
    * paid, and cash reports never count the advance a second time.
    */
   advanceUsed: number;
+  /** "order" on an OR- bill written when an advance order went out. Absent on
+   *  every till bill. `no` is then the order number, printed as OR-0043. */
+  kind?: "order";
+  /** The order an OR- bill came from. */
+  orderId?: string;
 }
 
 export type PaymentType = "cash" | "credit";
@@ -127,6 +132,8 @@ export interface CreditAllocation {
   /** null means the share that went against the customer's opening balance. */
   billId: string | null;
   billNo: number | null;
+  /** "order" when the bill was an OR- bill, so receipts print OR-0043. */
+  billKind?: "order";
   amount: number;
 }
 
@@ -152,3 +159,64 @@ export interface CreditPayment {
 }
 
 export type Role = "cashier" | "admin";
+
+/** confirmed → out (for delivery, with its OR- bill) → delivered. */
+export type OrderStatus = "confirmed" | "out" | "delivered" | "cancelled";
+
+/** One product asked for. `price` is the list price when booked — an estimate
+ *  shown in the app, never texted; the bill is priced on the delivery day. */
+export interface OrderLine {
+  productId: string;
+  name: string;
+  categoryId?: string;
+  unit: string;
+  qty: number;
+  price: number;
+}
+
+export interface Order {
+  id: string;
+  /** 43 → "OR-0043". Also the `no` of the bill it becomes. */
+  orderNo: number;
+  customerId: string;
+  customerName: string;
+  /** Sri Lanka calendar day, "2026-11-18". */
+  deliveryDate: string;
+  lines: OrderLine[];
+  /** 0 when there is none. Becomes a "Delivery charge" line on the bill. */
+  deliveryCharge: number;
+  notes: string | null;
+  status: OrderStatus;
+  /** Bumped when an admin reopens an order whose bill was voided, so the next
+   *  bill gets a fresh id: `${id}-${sendSeq}`. */
+  sendSeq: number;
+  billId: string | null;
+  /** Secret in the customer's track link. */
+  trackToken: string;
+  createdAt: number;
+  createdBy: string;
+  createdByName: string;
+  outAt: number | null;
+  outBy: string | null;
+  deliveredAt: number | null;
+  deliveredBy: string | null;
+  cancelledAt: number | null;
+  updatedAt: number;
+}
+
+export interface OrderChange {
+  field: string;
+  before: string;
+  after: string;
+}
+
+/** One entry in an order's change log — written by functions/ only. */
+export interface OrderLogEntry {
+  id: string;
+  at: number;
+  by: string;
+  byName: string;
+  action: "placed" | "edited" | "rescheduled" | "cancelled" | "reopened" | "out" | "delivered";
+  changes: OrderChange[];
+  note: string | null;
+}

@@ -23,6 +23,13 @@
     ],
     "rewrites": [
       {
+        "source": "/api/track",
+        "function": {
+          "functionId": "trackOrder",
+          "region": "us-central1"
+        }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
@@ -58,10 +65,45 @@
             "value": "application/javascript; charset=utf-8"
           }
         ]
+      },
+      {
+        "source": "/t",
+        "headers": [
+          {
+            "key": "X-Robots-Tag",
+            "value": "noindex, nofollow"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "no-referrer"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          }
+        ]
       }
     ]
   },
   "storage": {
     "rules": "storage.rules"
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "functions": {
+      "port": 5001
+    },
+    "ui": {
+      "enabled": false
+    },
+    "singleProjectMode": true,
+    "storage": {
+      "port": 9199
+    }
   }
 }

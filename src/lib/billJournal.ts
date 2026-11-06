@@ -41,6 +41,9 @@ export interface JournalEntry {
   discount?: number;
   /** Customer advance used — see Bill.advanceUsed. Absent on older entries. */
   advanceUsed?: number;
+  /** An OR- bill: re-sent together with its order going out, or the rules refuse it. */
+  kind?: "order";
+  orderId?: string;
   state: "pending" | "failed";
   /** Why the server refused it. Only set once state is "failed". */
   error: string | null;

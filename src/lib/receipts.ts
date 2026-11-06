@@ -4,6 +4,7 @@ import { POWERED_BY, SHOP_DETAILS } from "@/lib/constants";
 import { lineAmount } from "@/lib/billLines";
 import { Ticket, columnsFor } from "@/lib/printer";
 import type { Bill, Category, Product } from "@/lib/types";
+import { billLabel } from "@/lib/orders";
 
 /** "1 375.00" — two decimals, no currency, the way the old receipts read. */
 function amt(n: number): string {
@@ -33,7 +34,7 @@ export interface ReceiptContext {
 /** Big bill number in the top corner, as the old app printed its reference. */
 function billNumber(t: Ticket, bill: Bill, reprint?: boolean) {
   t.align("right").size(2, 2).bold(true);
-  t.line(`${reprint ? "REPRINT " : ""}#${bill.no}`);
+  t.line(`${reprint ? "REPRINT " : ""}${billLabel(bill)}`);
   t.size(1, 1).bold(false);
 }
 

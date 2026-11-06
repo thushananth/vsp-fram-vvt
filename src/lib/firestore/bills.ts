@@ -59,6 +59,9 @@ interface BillDraft {
   discount?: number;
   /** Customer advance spent on this bill. Absent on older journal entries. */
   advanceUsed?: number;
+  /** An OR- bill — written in the same batch as its order going out. */
+  kind?: "order";
+  orderId?: string;
 }
 
 function round2(n: number): number {
@@ -121,7 +124,22 @@ function commitBill(draft: BillDraft): Promise<void> {
     due,
     discount: draft.discount ?? 0,
     advanceUsed,
+    ...(draft.kind === "order" && draft.orderId ? { kind: "order", orderId: draft.orderId } : {}),
   });
+
+  // An OR- bill and its order going out are one write: the rules refuse
+  // either without the other, so an order can never be "out" with no bill,
+  // and a double tap or an offline replay lands on the same bill id.
+  if (draft.kind === "order" && draft.orderId) {
+    batch.update(doc(db, "orders", draft.orderId), {
+      status: "out",
+      billId: draft.id,
+      outAt: draft.createdAt,
+      outBy: draft.cashierId,
+      updatedAt: draft.createdAt,
+      updatedBy: draft.cashierId,
+    });
+  }
 
   // Only the unpaid remainder goes on the balance — a bill part-settled at the
   // till must not put its whole total on the customer's account.
@@ -160,6 +178,11 @@ export function createBill(params: {
   paid: number;
   discount?: number;
   advanceUsed?: number;
+  /**
+   * An advance order going out. The bill takes the order's number (printed
+   * OR-0043) and a fixed id, instead of a number from the till's lease.
+   */
+  order?: { orderId: string; billId: string; orderNo: number };
 }): CreatedBill {
   // A backstop, not the user-facing check — the till blocks a short payment
   // from a walk-in before it ever gets here, with a warning the cashier reads.
@@ -167,13 +190,15 @@ export function createBill(params: {
     throw new Error("Money left owing needs a customer to owe it");
   }
 
-  const { no, provisional } = takeBillNo();
+  const { order, ...rest } = params;
+  const { no, provisional } = order ? { no: order.orderNo, provisional: false } : takeBillNo();
   const draft: BillDraft = {
-    id: doc(collection(db, "bills")).id,
+    id: order ? order.billId : doc(collection(db, "bills")).id,
     no,
     provisional,
     createdAt: Date.now(),
-    ...params,
+    ...rest,
+    ...(order ? { kind: "order" as const, orderId: order.orderId } : {}),
   };
 
   recordPending(draft);
@@ -191,7 +216,7 @@ export function createBill(params: {
 
   // Keep the block stocked while the connection is good, so a till that sells
   // through its lease mid-shift isn't stranded when the wifi drops.
-  topUpLeaseIfLow();
+  if (!order) topUpLeaseIfLow();
 
   return { id: draft.id, no, createdAt: draft.createdAt, provisional, accepted };
 }
@@ -323,6 +348,7 @@ function toBill(id: string, data: Record<string, unknown>, pending: boolean): Bi
     due: (data.due as number) ?? 0,
     discount: (data.discount as number) ?? 0,
     advanceUsed: (data.advanceUsed as number) ?? 0,
+    ...(data.kind === "order" ? { kind: "order" as const, orderId: (data.orderId as string) ?? "" } : {}),
   };
 }
 

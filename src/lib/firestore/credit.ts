@@ -16,11 +16,14 @@ import { db } from "@/lib/firebase";
 import { useLive } from "@/lib/firestore/live";
 import { requireServer } from "@/lib/requireServer";
 import type { Bill, CreditAllocation, CreditPayment } from "@/lib/types";
+import { allocationLabel, billLabel } from "@/lib/orders";
 
 /** A settleable line on the credit screen: a bill, or the opening balance. */
 export interface OutstandingLine {
   billId: string | null;
   billNo: number | null;
+  /** "order" on an OR- bill. */
+  billKind?: "order";
   label: string;
   createdAt: number;
   due: number;
@@ -45,7 +48,8 @@ export function outstandingLines(params: {
     .map((b) => ({
       billId: b.id,
       billNo: b.no,
-      label: `Bill #${b.no}`,
+      ...(b.kind === "order" ? { billKind: "order" as const } : {}),
+      label: `Bill ${billLabel(b)}`,
       createdAt: b.createdAt,
       due: b.due,
     }));
@@ -71,7 +75,13 @@ export function allocate(amount: number, lines: OutstandingLine[]): CreditAlloca
     if (left <= 0) break;
     const take = round2(Math.min(left, line.due));
     if (take <= 0) continue;
-    allocations.push({ billId: line.billId, billNo: line.billNo, amount: take });
+    allocations.push({
+      billId: line.billId,
+      billNo: line.billNo,
+      // Never written as undefined: Firestore refuses undefined fields.
+      ...(line.billKind ? { billKind: line.billKind } : {}),
+      amount: take,
+    });
     left = round2(left - take);
   }
   return allocations;
@@ -91,7 +101,7 @@ function millis(value: unknown): number {
 export function describePayment(
   p: Pick<CreditPayment, "method" | "allocations" | "advance" | "imported">,
 ): string {
-  const bills = p.allocations.map((a) => (a.billNo ? `#${a.billNo}` : "Opening")).join(", ");
+  const bills = p.allocations.map((a) => allocationLabel(a)).join(", ");
   if (p.imported) return "Old app";
   const parts = [p.method === "advance" ? `Used advance${bills ? ` on ${bills}` : ""}` : bills];
   if (p.advance > 0) parts.push(`Rs ${p.advance.toLocaleString("en-LK")} kept as advance`);
@@ -150,8 +160,15 @@ export async function payCredit(params: {
       const customerName = (customer.name as string) ?? "";
       const openingBalance = (customer.openingBalance as number) ?? 0;
 
-      const fresh: { id: string; no: number; total: number; paid: number; due: number; createdAt: number }[] =
-        [];
+      const fresh: {
+        id: string;
+        no: number;
+        kind?: "order";
+        total: number;
+        paid: number;
+        due: number;
+        createdAt: number;
+      }[] = [];
       for (const id of candidateIds) {
         const snap = await tx.get(doc(db, "bills", id));
         const data = snap.data();
@@ -161,6 +178,7 @@ export async function payCredit(params: {
         fresh.push({
           id,
           no: (data.no as number) ?? 0,
+          ...(data.kind === "order" ? { kind: "order" as const } : {}),
           total: (data.total as number) ?? 0,
           paid: (data.paid as number) ?? 0,
           due,
@@ -174,6 +192,7 @@ export async function payCredit(params: {
             ({
               id: b.id,
               no: b.no,
+              kind: b.kind,
               createdAt: b.createdAt,
               due: b.due,
               status: "paid",

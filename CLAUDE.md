@@ -22,6 +22,38 @@ a **tablet held in portrait**; admins also use a laptop. Money is shown as `Rs 1
 - **Deploy only when the user explicitly says "deploy".** Building is fine; `firebase deploy` is not.
 - Don't commit unless asked.
 
+## Security rules
+
+- Every data rule asks for **`isStaff()`** (a `users/{uid}` profile made by `createUser`, not switched off),
+  never just `request.auth != null`: the API key is public, so anyone can make a Firebase Auth account.
+- Rules check **shape, not maths**. Bills and balance increments are written offline and the rules run when
+  they flush, so anything stricter than "fields present, right types" can refuse a real sale.
+- **App Check** (reCAPTCHA Enterprise, key "VSP Farm") starts from `RootShell` after mount via
+  `startAppCheck()`, never at import (hydration would remove reCAPTCHA's element). It only runs on the hosts in
+  `APP_CHECK_HOSTS`, which must match the key's allowed domains in Google Cloud. The floating badge is hidden
+  in CSS; the required "Protected by reCAPTCHA" notice is on the sign-in screen (`RecaptchaNotice`).
+- `npm run test:rules` replays the till's real writes (sales, the bill-number lease, payments, voids, send-out)
+  plus the refusals. Run it after any change to `firestore.rules` or `storage.rules`, and add a case for any
+  new client write.
+
+## Advance orders
+
+- `orders/{id}`: placed, edited, cancelled and reopened only through the `placeOrder` / `updateOrder`
+  callables (`functions/src/orders.ts`), which number them (`counters/orders`) and write `orders/{id}/log`.
+  Editing or cancelling is admin-only.
+- The client makes two moves only: **send out** (one batch: the OR- bill with id `${orderId}-${sendSeq}`,
+  the order to `out`, the balance increment; see `createBill({ order })`) and **delivered**. The rules refuse
+  either half of the send-out without the other.
+- OR- bills are normal credit bills with `kind: "order"` and `no = orderNo`. Print bill numbers with
+  `billLabel()` (`src/lib/orders.ts`), never `#${bill.no}`.
+- `onOrderStatusChanged` logs out/delivered, updates the public `orderTracking/{token}` copy and texts the
+  customer. `orderAlertTomorrow` (16:00) and `orderAlertMorning` (06:00, Asia/Colombo) text the numbers set in
+  Settings → Orders. Every order SMS has its own switch; defaults live in both `settings.ts` and `orders.ts`.
+- The customer's track page is `public/t.html` + `t.js` (no app bundle, no login), reading `/api/track`
+  (the `trackOrder` function, Hosting rewrite). Firestore stays closed to the public.
+- `npm run test:orders` runs the whole flow on the emulators. It refuses to start if
+  `functions/.secret.local` exists, since the emulator would then send real SMS.
+
 ## Data loading: read this before adding a hook
 
 All Firestore reads that drive UI go through **`useLive(key, open)` in `src/lib/firestore/live.ts`**.
@@ -79,6 +111,8 @@ npm run dev      # local dev (slow first visit per route, that's normal)
 npm run build    # next build + generates out/sw.js
 npm run lint
 npx tsc --noEmit
+npm run test:rules   # Firestore + Storage rules on the emulator
+npm run test:orders  # advance orders end to end (auth, firestore, functions emulators)
 ```
 
 `npm run lint` has a few older `react-hooks/set-state-in-effect` errors (AppShell, auth, online,

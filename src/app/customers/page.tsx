@@ -14,6 +14,7 @@ import { dateAndTime, money } from "@/lib/format";
 import { normalizeMobile, reminderPreview, sendReminderSms } from "@/lib/sms";
 import { MessageSquare } from "lucide-react";
 import type { Customer, CustomerType } from "@/lib/types";
+import { billLabel } from "@/lib/orders";
 
 export default function CustomersPage() {
   const { customers, loading } = useCustomers();
@@ -322,7 +323,7 @@ function CustomerHistorySheet({
                 className="flex items-center gap-2 rounded-xl border border-border px-3.5 py-2.5"
               >
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-bold">Bill #{b.no}</div>
+                  <div className="text-sm font-bold">Bill {billLabel(b)}</div>
                   <div className="text-[11px] font-medium text-muted-2">{dateAndTime(b.createdAt)}</div>
                 </div>
                 <div className="tabular-nums text-right">

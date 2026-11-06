@@ -3,6 +3,7 @@ import { getAuth } from "firebase-admin/auth";
 import { db } from "./db";
 
 export { requestDeviceApproval, verifyDeviceCode, setDeviceStatus, removeDevice, sendTestDeviceEmail } from "./devices";
+export { placeOrder, updateOrder, onOrderStatusChanged, orderAlertTomorrow, orderAlertMorning, trackOrder } from "./orders";
 export { sendBillSms, sendPromoSms, countPromoRecipients, sendReminderSms, sendWelcomeSms, smsAccountStatus, sendPaymentSms } from "./sms";
 
 interface CreateUserData {

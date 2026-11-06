@@ -31,6 +31,7 @@ import {
   type ReportContext,
 } from "@/lib/customerReport";
 import type { Customer } from "@/lib/types";
+import { billLabel } from "@/lib/orders";
 
 const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [
   { mode: "today", label: "Today" },
@@ -442,7 +443,7 @@ function CustomerStatement({
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="tabular-nums text-[15px] font-extrabold">#{b.no}</span>
+                          <span className="tabular-nums text-[15px] font-extrabold">{billLabel(b)}</span>
                           <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${BILL_STATE_STYLE[st]}`}>
                             {BILL_STATE_LABEL[st]}
                           </span>

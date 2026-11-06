@@ -2,6 +2,7 @@ import { POWERED_BY_LINE, SHOP_DETAILS } from "@/lib/constants";
 import { lineAmount } from "@/lib/billLines";
 import { localDateKey } from "@/lib/format";
 import type { Bill, CreditPayment, Customer } from "@/lib/types";
+import { allocationLabel, billLabel } from "@/lib/orders";
 
 /**
  * One customer's activity inside a date range. Built from the bills and
@@ -164,7 +165,7 @@ export function billLineRows(bills: Bill[], customerName: string, ctx: ReportCon
       date: localDateKey(b.createdAt),
       time: timeKey(b.createdAt),
       customer: b.customerName || customerName,
-      refNo: String(b.no),
+      refNo: billLabel(b).replace(/^#/, ""),
       item: ctx.categoryOf?.(l.productId, l.categoryId) ?? "",
       subItem: l.name,
       // Only an overridden line carries listPrice — anything else sold at list.
@@ -377,7 +378,7 @@ export async function downloadCustomerReportPdf(
     ["Date", "Applied to", "Amount"],
     row.payments.map((p) => [
       pdfDateTime(p.createdAt),
-      p.allocations.map((a) => (a.billNo ? `#${a.billNo}` : "Opening")).join(", ") +
+      p.allocations.map((a) => allocationLabel(a)).join(", ") +
         (p.advance > 0 ? ` · ${pdfAmount(p.advance)} kept as advance` : ""),
       pdfAmount(p.amount),
     ]),

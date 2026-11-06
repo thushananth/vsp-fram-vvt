@@ -16,11 +16,11 @@ const SMSLENZ_URL = "https://smslenz.lk/api";
  * `firebase functions:secrets:set SMSLENZ_API_KEY`. The user and sender IDs
  * aren't secret and stay in .env.
  */
-const smslenzApiKey = defineSecret("SMSLENZ_API_KEY");
+export const smslenzApiKey = defineSecret("SMSLENZ_API_KEY");
 
 // Keep in step with SMS_SHOP_NAME / SMS_CONTACT_LINE in src/lib/sms.ts.
-const SHOP_NAME = "VSP FARM";
-const CONTACT_LINE = "T.P 077 023 8493 | 077 044 5076";
+export const SHOP_NAME = "VSP FARM";
+export const CONTACT_LINE = "T.P 077 023 8493 | 077 044 5076";
 
 /** SMSlenz's documented cap for send-sms and send-bulk-sms. */
 const MAX_MESSAGE_LENGTH = 1500;
@@ -97,10 +97,10 @@ export async function sendBulkSms(contacts: string[], message: string): Promise<
   await callSmslenz("send-bulk-sms", { contacts: contacts.map((c) => `+${c}`), message: clip(message) });
 }
 
-const rs = (n: number) => `Rs ${Math.round(n).toLocaleString("en-US")}`;
+export const rs = (n: number) => `Rs ${Math.round(n).toLocaleString("en-US")}`;
 
 /** "Dear Kumar," — or just "Dear customer," for a walk-in saved under their number. */
-function greeting(customer: FirebaseFirestore.DocumentData | undefined): string {
+export function greeting(customer: FirebaseFirestore.DocumentData | undefined): string {
   const name = typeof customer?.name === "string" ? customer.name.trim() : "";
   return customer?.autoNamed === true || !name ? "Dear customer" : `Dear ${name}`;
 }
@@ -115,7 +115,7 @@ function billMessage(bill: FirebaseFirestore.DocumentData, balance: number | nul
   return lines.join("\n");
 }
 
-async function requireSignedIn(uid: string | undefined) {
+export async function requireSignedIn(uid: string | undefined) {
   if (!uid) throw new HttpsError("unauthenticated", "Sign in required");
   const profile = await db.doc(`users/${uid}`).get();
   if (!profile.exists || profile.data()?.active === false) {
@@ -132,7 +132,7 @@ async function requireAdmin(uid: string | undefined) {
 }
 
 /** settings/store as saved. A switch never saved is on — same as DEFAULT_STORE_SETTINGS. */
-async function settingOn(key: string): Promise<boolean> {
+export async function settingOn(key: string): Promise<boolean> {
   return (await db.doc("settings/store").get()).data()?.[key] !== false;
 }
 
@@ -156,6 +156,8 @@ export const sendBillSms = onCall<{ billId: string; mobile?: string }>({ secrets
   const bill = billSnap.data()!;
   if (bill.status === "void") throw new HttpsError("failed-precondition", "Bill is void");
   if (bill.smsSentAt) return { sent: false, reason: "already-sent" };
+  // An OR- bill is texted as "out for delivery" by functions/orders.ts.
+  if (bill.kind === "order") return { sent: false, reason: "order-bill" };
 
   let contact: string | null;
   let balance: number | null = null;

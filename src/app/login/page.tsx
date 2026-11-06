@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { getKnownEmails } from "@/lib/emailHistory";
 import Splash from "@/components/Splash";
 import BrandMark from "@/components/BrandMark";
+import RecaptchaNotice from "@/components/RecaptchaNotice";
 
 export default function LoginPage() {
   const { user, profile, loading, signIn } = useAuth();
@@ -125,7 +126,9 @@ export default function LoginPage() {
         </button>
       </form>
 
-      <span className="relative mt-8 text-[10px] font-bold uppercase tracking-[0.2em] text-white/25">
+      <RecaptchaNotice />
+
+      <span className="relative mt-6 text-[10px] font-bold uppercase tracking-[0.2em] text-white/25">
         Powered by 5XCODES
       </span>
     </div>

@@ -8,6 +8,7 @@ import { useProducts } from "@/lib/firestore/products";
 import { useCategories } from "@/lib/firestore/categories";
 import { buildSalesReport } from "@/lib/salesReport";
 import Stat from "@/components/ui/Stat";
+import OrderCalendar from "@/components/orders/OrderCalendar";
 import { money, initials, localDateKey } from "@/lib/format";
 
 const dayKey = localDateKey;
@@ -182,6 +183,8 @@ export default function DashboardPage() {
               <Stat key={s.label} label={s.label} value={s.value} note={s.note} noteColor={s.color} />
             ))}
           </div>
+
+          <OrderCalendar />
 
           <h2 className="mb-2.5 mt-6 text-[17px] font-bold">Last 7 days</h2>
           <div className="rounded-2xl border border-border bg-surface p-4 pb-2.5">

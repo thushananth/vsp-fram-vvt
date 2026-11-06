@@ -15,6 +15,7 @@ import {
   pdfQty,
   tableStyle,
 } from "@/lib/pdf/brand";
+import { allocationLabel, billLabel } from "@/lib/orders";
 
 type AutoTable = Awaited<ReturnType<typeof loadPdf>>["autoTable"];
 
@@ -234,7 +235,7 @@ function billRows(bills: Bill[], userName: (uid: string) => string, unitOf: (id:
   return bills.flatMap((b) =>
     b.lines.map((l, i) => [
       i === 0 ? pdfDateTime(b.createdAt).slice(11) : "",
-      i === 0 ? `#${b.no}` : "",
+      i === 0 ? billLabel(b) : "",
       i === 0 ? (b.customerName ?? "Walk-in") : "",
       l.name,
       `${pdfQty(l.qty)} ${unitOf(l.productId)}`.trim(),
@@ -293,7 +294,7 @@ export async function downloadDetailPdf(
     report.payments.map((p) => [
       pdfDateTime(p.createdAt),
       p.customerName,
-      p.allocations.map((a) => (a.billNo ? `#${a.billNo}` : "opening")).join(", "),
+      p.allocations.map((a) => allocationLabel(a, "opening")).join(", "),
       pdfAmount(p.amount),
     ]),
     { right: [3], foot: ["Total", "", "", pdfAmount(report.totals.received)] },

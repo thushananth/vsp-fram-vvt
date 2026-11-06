@@ -38,6 +38,23 @@ export interface StoreSettings {
   /** Text the customer a receipt when a credit payment is taken. The cashier
    *  can still untick it for one payment. */
   sendPaymentSms: boolean;
+  // Advance orders — functions/orders.ts reads these with the same defaults.
+  /** Text the customer "order confirmed" with the track link. */
+  orderSmsConfirmed: boolean;
+  /** Text the customer "on the way" with the bill total when it goes out. */
+  orderSmsOut: boolean;
+  /** Text the customer when it's marked delivered. Off by default to save credit. */
+  orderSmsDelivered: boolean;
+  /** Text the customer when an admin moves the delivery date. */
+  orderSmsRescheduled: boolean;
+  /** Text the customer when an admin cancels the order. */
+  orderSmsCancelled: boolean;
+  /** 16:00 the day before: "3 orders for tomorrow" to these numbers. */
+  orderAlertTomorrowOn: boolean;
+  orderAlertTomorrowMobiles: string[];
+  /** 06:00 on the day: the cashier's prep list to these numbers. */
+  orderAlertMorningOn: boolean;
+  orderAlertMorningMobiles: string[];
 }
 
 export const DEFAULT_STORE_SETTINGS: StoreSettings = {
@@ -53,6 +70,15 @@ export const DEFAULT_STORE_SETTINGS: StoreSettings = {
   sendBillSms: true,
   sendWelcomeSms: true,
   sendPaymentSms: true,
+  orderSmsConfirmed: true,
+  orderSmsOut: true,
+  orderSmsDelivered: false,
+  orderSmsRescheduled: true,
+  orderSmsCancelled: true,
+  orderAlertTomorrowOn: true,
+  orderAlertTomorrowMobiles: [],
+  orderAlertMorningOn: true,
+  orderAlertMorningMobiles: [],
 };
 
 const STORE_DOC = "settings/store";

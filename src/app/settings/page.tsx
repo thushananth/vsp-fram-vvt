@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, Coins, Mail, MessageSquare, Printer, ShieldCheck, ShieldHalf, X } from "lucide-react";
+import { CalendarClock, ChevronRight, Coins, Mail, MessageSquare, Printer, ShieldCheck, ShieldHalf, X } from "lucide-react";
 import { useAdminGate } from "@/components/AdminGate";
 import ChangePasswordCard from "@/components/ChangePasswordCard";
 import NumField from "@/components/ui/NumField";
@@ -13,7 +13,7 @@ import { collectDeviceDetails, getDeviceId } from "@/lib/device";
 import { printTickets, usePrinter } from "@/lib/printer";
 import { testTicket } from "@/lib/receipts";
 import { money } from "@/lib/format";
-import { smsAccountStatus } from "@/lib/sms";
+import { localMobile, normalizeMobile, smsAccountStatus } from "@/lib/sms";
 
 const ROUND_OFF_PRESETS = [0, 10, 20, 50];
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -38,6 +38,92 @@ function Row({ title, body, children }: { title: string; body: string; children:
         <div className="mt-0.5 text-xs font-medium leading-relaxed text-muted">{body}</div>
       </div>
       {children}
+    </div>
+  );
+}
+
+/** Alert numbers for one scheduled order SMS — at most 5, checked as Sri Lankan mobiles. */
+function MobileList({
+  id,
+  numbers,
+  onChange,
+}: {
+  id: string;
+  numbers: string[];
+  onChange: (numbers: string[]) => void;
+}) {
+  const [text, setText] = useState("");
+  const [bad, setBad] = useState(false);
+  const full = numbers.length >= 5;
+
+  function add() {
+    const n = normalizeMobile(text);
+    if (!n) {
+      setBad(true);
+      return;
+    }
+    const local = localMobile(n);
+    if (!numbers.includes(local)) onChange([...numbers, local]);
+    setText("");
+    setBad(false);
+  }
+
+  return (
+    <div className="mt-2.5 flex flex-col gap-2">
+      {numbers.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {numbers.map((n) => (
+            <span
+              key={n}
+              className="tabular-nums flex items-center gap-1.5 rounded-full border border-border bg-ground py-1 pl-3 pr-1 text-sm font-semibold"
+            >
+              {n}
+              <button
+                type="button"
+                aria-label={`Remove ${n}`}
+                onClick={() => onChange(numbers.filter((x) => x !== n))}
+                className="flex h-7 w-7 items-center justify-center rounded-full text-muted hover:bg-border"
+              >
+                <X size={14} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {!full && (
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            add();
+          }}
+        >
+          <input
+            id={id}
+            type="tel"
+            inputMode="tel"
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setBad(false);
+            }}
+            placeholder="07X XXX XXXX"
+            aria-label="Mobile number to alert"
+            className={`tabular-nums h-[44px] min-w-0 flex-1 rounded-xl border bg-transparent px-3 text-sm font-medium outline-none focus:border-accent ${
+              bad ? "border-danger" : "border-border"
+            }`}
+          />
+          <button
+            type="submit"
+            disabled={!text.trim()}
+            className="min-h-[44px] shrink-0 rounded-xl border border-border px-4 text-sm font-bold disabled:opacity-50"
+          >
+            Add
+          </button>
+        </form>
+      )}
+      {bad && <p className="text-xs font-bold text-danger">That isn&apos;t a Sri Lankan mobile number.</p>}
+      {numbers.length === 0 && <p className="text-xs font-semibold text-warning">No numbers yet. Nothing will be sent.</p>}
     </div>
   );
 }
@@ -306,6 +392,69 @@ export default function SettingsPage() {
               </div>
               <ChevronRight size={18} className="shrink-0 text-muted-2" />
             </Link>
+          </Card>
+
+          <Card icon={CalendarClock} title="Orders">
+            <div className="px-4 py-3.5">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-[15px] font-bold">4pm: tomorrow&apos;s orders</div>
+                  <div className="mt-0.5 text-xs font-medium leading-relaxed text-muted">
+                    The day before, at 4pm, text how many orders are booked for tomorrow. Nothing is sent when there are
+                    none.
+                  </div>
+                </div>
+                <Switch
+                  label="4pm tomorrow's orders alert"
+                  checked={draft.orderAlertTomorrowOn}
+                  onChange={(v) => set("orderAlertTomorrowOn", v)}
+                />
+              </div>
+              {draft.orderAlertTomorrowOn && (
+                <MobileList
+                  id="alert-tomorrow-number"
+                  numbers={draft.orderAlertTomorrowMobiles}
+                  onChange={(v) => set("orderAlertTomorrowMobiles", v)}
+                />
+              )}
+            </div>
+            <div className="px-4 py-3.5">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-[15px] font-bold">6am: prep reminder for the cashier</div>
+                  <div className="mt-0.5 text-xs font-medium leading-relaxed text-muted">
+                    On the delivery day, at 6am, text how much of each product to get ready, then the order numbers.
+                  </div>
+                </div>
+                <Switch
+                  label="6am prep reminder"
+                  checked={draft.orderAlertMorningOn}
+                  onChange={(v) => set("orderAlertMorningOn", v)}
+                />
+              </div>
+              {draft.orderAlertMorningOn && (
+                <MobileList
+                  id="alert-morning-number"
+                  numbers={draft.orderAlertMorningMobiles}
+                  onChange={(v) => set("orderAlertMorningMobiles", v)}
+                />
+              )}
+            </div>
+            <Row title="Order confirmed" body="Texts the customer the order number, delivery day and track link. No price.">
+              <Switch label="Order confirmed SMS" checked={draft.orderSmsConfirmed} onChange={(v) => set("orderSmsConfirmed", v)} />
+            </Row>
+            <Row title="Out for delivery" body="When it's sent out: the bill total and the track link. Replaces the normal bill SMS.">
+              <Switch label="Out for delivery SMS" checked={draft.orderSmsOut} onChange={(v) => set("orderSmsOut", v)} />
+            </Row>
+            <Row title="Delivered" body="A short thank-you once it's marked delivered.">
+              <Switch label="Delivered SMS" checked={draft.orderSmsDelivered} onChange={(v) => set("orderSmsDelivered", v)} />
+            </Row>
+            <Row title="Date changed" body="When an admin moves the delivery day.">
+              <Switch label="Date changed SMS" checked={draft.orderSmsRescheduled} onChange={(v) => set("orderSmsRescheduled", v)} />
+            </Row>
+            <Row title="Order cancelled" body="When an admin cancels a confirmed order.">
+              <Switch label="Order cancelled SMS" checked={draft.orderSmsCancelled} onChange={(v) => set("orderSmsCancelled", v)} />
+            </Row>
           </Card>
 
           <Card icon={Coins} title="Walk-in round-off">

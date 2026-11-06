@@ -6,23 +6,55 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isAdmin() {
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // A real member of staff: signed in AND holding a profile that Cloud
+    // Functions created (createUser), not switched off. Any Firebase Auth
+    // account alone is not enough — anyone could sign up with the public API
+    // key, so every data rule below asks for this rather than isSignedIn().
+    // `active` missing counts as active, the same as functions/ treats it.
+    function isStaff() {
       return isSignedIn() &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        profile().data.get('active', true) != false;
+    }
+
+    function isAdmin() {
+      return isStaff() && profile().data.role == 'admin';
+    }
+
+    function permsPath() {
+      return /databases/$(database)/documents/settings/cashierPermissions;
     }
 
     // Admin-configurable cashier permissions (see Settings page). Missing
     // doc == every flag off, so a fresh project defaults to locked-down.
     function cashierCan(flag) {
-      return isSignedIn() &&
-        exists(/databases/$(database)/documents/settings/cashierPermissions) &&
-        get(/databases/$(database)/documents/settings/cashierPermissions).data[flag] == true;
+      return isStaff() && exists(permsPath()) && get(permsPath()).data[flag] == true;
+    }
+
+    // For flags that are on until an admin turns them off (manageOrders).
+    // Must match DEFAULT_PERMISSIONS in src/lib/firestore/permissions.ts.
+    function cashierCanDefaultOn(flag) {
+      return isStaff() && (!exists(permsPath()) || get(permsPath()).data.get(flag, true) == true);
+    }
+
+    function isNum(v) {
+      return v is int || v is float;
+    }
+
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
     }
 
     // User profiles — only Cloud Functions (Admin SDK, see functions/) may
     // create or modify these, so every user can trust role claims here.
+    // isSignedIn, not isStaff: AuthGate reads its own profile to find out
+    // whether it is staff at all.
     match /users/{uid} {
-      allow read: if isSignedIn();
+      allow read: if isStaff() || (isSignedIn() && request.auth.uid == uid);
       allow write: if false;
     }
 
@@ -35,20 +67,62 @@ service cloud.firestore {
     }
 
     match /products/{id} {
-      allow read: if isSignedIn();
+      allow read: if isStaff();
       allow write: if canManageProducts();
     }
 
     match /categories/{id} {
-      allow read: if isSignedIn();
+      allow read: if isStaff();
       allow write: if isAdmin() || cashierCan('manageCategories');
     }
 
-    // Settling credit moves paid/due on a bill, which any signed-in user may
+    // ── Bills ────────────────────────────────────────────────────────────
+    // Shape only, never the maths: a bill is written offline and the rules
+    // run when it finally flushes, so anything stricter than "the fields are
+    // there and the right type" risks refusing a real sale.
+    function validBill(id) {
+      let d = request.resource.data;
+      return d.keys().hasAll(['no', 'createdAt', 'cashierId', 'lines', 'total', 'status',
+                              'paymentType', 'paid', 'due', 'customerId']) &&
+        d.no is int &&
+        d.createdAt is timestamp &&
+        d.cashierId is string &&
+        // A held bill re-sent by an admin keeps the cashier who took it.
+        (d.cashierId == request.auth.uid || isAdmin()) &&
+        d.lines is list && d.lines.size() > 0 && d.lines.size() <= 500 &&
+        isNum(d.total) && d.total >= 0 &&
+        isNum(d.paid) && d.paid >= 0 &&
+        isNum(d.due) && d.due >= 0 &&
+        d.status == 'paid' &&
+        d.paymentType in ['cash', 'credit'] &&
+        (d.customerId == null || d.customerId is string) &&
+        (d.get('kind', null) == null ? !('orderId' in d) : validOrderBill(id));
+    }
+
+    // An OR- bill exists only together with its order going out: the same
+    // batch must move that order to "out" and point it at this bill.
+    function validOrderBill(id) {
+      let d = request.resource.data;
+      let o = getAfter(/databases/$(database)/documents/orders/$(d.orderId)).data;
+      return d.kind == 'order' &&
+        d.orderId is string &&
+        o.status == 'out' &&
+        o.billId == id &&
+        d.no == o.orderNo &&
+        d.customerId == o.customerId &&
+        d.paymentType == 'credit';
+    }
+
+    // Settling credit moves paid/due on a bill, which any member of staff may
     // do — voiding one (a status change) still needs the permission.
     function onlySettlesCredit() {
-      return request.resource.data.diff(resource.data).affectedKeys()
-        .hasOnly(['paid', 'due']);
+      return changed().hasOnly(['paid', 'due']) &&
+        isNum(request.resource.data.paid) && isNum(request.resource.data.due) &&
+        request.resource.data.due >= 0;
+    }
+
+    function onlyVoids() {
+      return changed().hasOnly(['status', 'due']) && request.resource.data.status == 'void';
     }
 
     // A walk-in who gives their mobile after the sale has the bill put under
@@ -57,39 +131,140 @@ service cloud.firestore {
     function onlyLinksWalkIn() {
       return resource.data.get('customerId', null) == null &&
         resource.data.get('due', 0) == 0 &&
-        request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['customerId', 'customerName']) &&
+        resource.data.get('kind', null) == null &&
+        changed().hasOnly(['customerId', 'customerName']) &&
         request.resource.data.customerId is string &&
         exists(/databases/$(database)/documents/customers/$(request.resource.data.customerId));
     }
 
     match /bills/{id} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn();
-      allow update: if isAdmin() || cashierCan('voidBills') ||
-        (isSignedIn() && (onlySettlesCredit() || onlyLinksWalkIn()));
+      allow read: if isStaff();
+      allow create: if isStaff() && validBill(id);
+      allow update: if isAdmin() ||
+        (isStaff() && (onlySettlesCredit() || onlyLinksWalkIn() ||
+                       (cashierCan('voidBills') && onlyVoids())));
       allow delete: if false;
     }
 
-    // Customers and their credit balance. Written client-side, like products
-    // and bills — the till has to be able to add a customer mid-sale.
+    // ── Customers ────────────────────────────────────────────────────────
+    // Written client-side, like bills — the till has to be able to add a
+    // customer mid-sale, and balances move with queued increment()s. The
+    // rules keep the record well-formed; they can't re-derive a balance.
+    function validCustomerFields(d) {
+      return d.name is string && d.name.size() > 0 && d.name.size() <= 120 &&
+        d.type in ['shop', 'person'] &&
+        d.mobileNumber is string && d.mobileNumber.size() <= 32 &&
+        isNum(d.get('remainingCredit', 0)) &&
+        isNum(d.get('openingBalance', 0)) &&
+        isNum(d.get('advance', 0)) &&
+        d.get('active', true) is bool;
+    }
+
+    function validCustomerChange(d) {
+      let c = changed();
+      return (!c.hasAny(['name']) || (d.name is string && d.name.size() > 0 && d.name.size() <= 120)) &&
+        (!c.hasAny(['type']) || d.type in ['shop', 'person']) &&
+        (!c.hasAny(['mobileNumber']) || (d.mobileNumber is string && d.mobileNumber.size() <= 32)) &&
+        (!c.hasAny(['remainingCredit']) || isNum(d.remainingCredit)) &&
+        (!c.hasAny(['openingBalance']) || isNum(d.openingBalance)) &&
+        (!c.hasAny(['advance']) || isNum(d.advance)) &&
+        (!c.hasAny(['active']) || d.active is bool);
+    }
+
     match /customers/{id} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow read: if isStaff();
+      // A new customer starts with nothing owed and nothing held.
+      allow create: if isStaff() && validCustomerFields(request.resource.data) &&
+        request.resource.data.get('remainingCredit', 0) == 0 &&
+        request.resource.data.get('openingBalance', 0) == 0 &&
+        request.resource.data.get('advance', 0) == 0;
+      // Only the fields being changed are checked: customers brought over
+      // from the Flutter app may lack some, and a balance update on one of
+      // them must still go through. The carried-in opening balance only ever
+      // goes down, except when an admin reverses a payment against it.
+      allow update: if isStaff() && validCustomerChange(request.resource.data) &&
+        !changed().hasAny(['createdAt']) &&
+        (request.resource.data.get('openingBalance', 0) <= resource.data.get('openingBalance', 0) || isAdmin());
+      allow delete: if false;
     }
 
     // Credit payments are the audit trail behind every balance change, so
     // they are append-only: nobody edits or deletes a receipt after the fact.
     match /creditPayments/{id} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn();
+      allow read: if isStaff();
+      allow create: if isStaff() &&
+        request.resource.data.receivedBy == request.auth.uid &&
+        request.resource.data.customerId is string &&
+        isNum(request.resource.data.amount) && request.resource.data.amount >= 0 &&
+        request.resource.data.method in ['cash', 'advance'] &&
+        request.resource.data.get('imported', false) == false;
       // A correction, not a routine edit — same bar as voiding a bill.
       allow update, delete: if isAdmin();
     }
 
+    // The till leases bill numbers in blocks (src/lib/billNumbers.ts). The
+    // sequence may only move forward, so nobody can rewind it into numbers
+    // already printed. Other counters (orders) belong to functions/ alone.
     match /counters/{id} {
-      allow read: if isSignedIn();
-      allow write: if isSignedIn();
+      allow read: if isStaff() && id == 'bills';
+      allow create: if isStaff() && id == 'bills' && request.resource.data.seq is int;
+      allow update: if isStaff() && id == 'bills' &&
+        changed().hasOnly(['seq']) &&
+        request.resource.data.seq is int &&
+        request.resource.data.seq > resource.data.get('seq', 0);
+      allow delete: if false;
+    }
+
+    // ── Advance orders ───────────────────────────────────────────────────
+    // Placed, edited, cancelled and reopened only through Cloud Functions
+    // (placeOrder / updateOrder), which number them and keep the change log.
+    // A client may make exactly two moves: send it out (together with its
+    // OR- bill, in one batch) and mark it delivered.
+    function canManageOrders() {
+      return isAdmin() || cashierCanDefaultOn('manageOrders');
+    }
+
+    function sendsOut(id) {
+      let d = request.resource.data;
+      let r = resource.data;
+      return r.status == 'confirmed' && d.status == 'out' &&
+        changed().hasOnly(['status', 'billId', 'outAt', 'outBy', 'updatedAt', 'updatedBy']) &&
+        d.billId == id + '-' + string(r.sendSeq) &&
+        d.outBy == request.auth.uid && d.updatedBy == request.auth.uid &&
+        isNum(d.outAt) &&
+        getAfter(/databases/$(database)/documents/bills/$(d.billId)).data.get('orderId', null) == id;
+    }
+
+    function delivers() {
+      let d = request.resource.data;
+      return resource.data.status == 'out' && d.status == 'delivered' &&
+        changed().hasOnly(['status', 'deliveredAt', 'deliveredBy', 'updatedAt', 'updatedBy']) &&
+        d.deliveredBy == request.auth.uid && d.updatedBy == request.auth.uid &&
+        isNum(d.deliveredAt);
+    }
+
+    match /orders/{id} {
+      allow read: if isStaff() && canManageOrders();
+      allow create, delete: if false;
+      allow update: if canManageOrders() && (sendsOut(id) || delivers());
+
+      // Who changed what and when. Written by functions/ in the same
+      // transaction as the change; nobody can edit or remove an entry.
+      match /log/{entryId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+    }
+
+    // The public tracking copy and the alert de-duplication markers are
+    // served and written by functions/ only. The track page reads through
+    // the trackOrder HTTP function, never from Firestore.
+    match /orderTracking/{token} {
+      allow read, write: if false;
+    }
+
+    match /orderDigests/{id} {
+      allow read, write: if false;
     }
 
     // Log of promotion sends — written by functions/ only.
@@ -99,10 +274,10 @@ service cloud.firestore {
     }
 
     // Cashier permission toggles and store settings — admin-editable from
-    // Settings, readable by everyone so a cashier's own client can gate its UI
+    // Settings, readable by staff so a cashier's own client can gate its UI
     // correctly. Covers settings/cashierPermissions and settings/store.
     match /settings/{id} {
-      allow read: if isSignedIn();
+      allow read: if isStaff();
       allow write: if isAdmin();
     }
 
@@ -112,7 +287,7 @@ service cloud.firestore {
     // admin's decision.
     match /deviceApprovals/{deviceId} {
       allow read: if isAdmin() ||
-        (isSignedIn() && (resource == null || request.auth.uid in resource.data.users));
+        (isStaff() && (resource == null || request.auth.uid in resource.data.users));
       allow write: if false;
     }
 

@@ -33,6 +33,11 @@ export interface CashierPermissions {
   rangeSummary: boolean;
   rangeDetail: boolean;
   customerReports: boolean;
+  // Orders
+  /** Take advance orders, send them out and mark them delivered. On unless an
+   *  admin turns it off — firestore.rules and functions/orders.ts treat a
+   *  missing flag the same way. Editing or cancelling stays admin-only. */
+  manageOrders: boolean;
 }
 
 export type PermissionKey = keyof CashierPermissions;
@@ -53,6 +58,7 @@ export const DEFAULT_PERMISSIONS: CashierPermissions = {
   rangeSummary: false,
   rangeDetail: false,
   customerReports: false,
+  manageOrders: true,
 };
 
 export interface PermissionGroup {
@@ -83,6 +89,18 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     items: [
       { key: "reprintBills", label: "Reprint & download bills", body: "Print a past receipt again or save it as a PDF." },
       { key: "voidBills", label: "Delete bills", body: "Void a bill. Unpaid credit on it comes off the customer's balance." },
+    ],
+  },
+  {
+    id: "orders",
+    title: "Orders",
+    blurb: "Booked ahead by shops",
+    items: [
+      {
+        key: "manageOrders",
+        label: "Take and deliver orders",
+        body: "Place advance orders, send them out as OR- bills and mark them delivered. Changing or cancelling a confirmed order is always admin-only.",
+      },
     ],
   },
   {

@@ -3,6 +3,7 @@
 import type { JournalEntry } from "@/lib/billJournal";
 import type { Bill } from "@/lib/types";
 import { localDateKey } from "@/lib/format";
+import { orderLabel } from "@/lib/orders";
 
 /**
  * Getting bills off the till without a server. Everything here works from data
@@ -47,6 +48,8 @@ export interface ExportableBill {
   change: number;
   cashierId: string;
   lines: { name: string; qty: number; price: number }[];
+  /** "order" on an OR- bill. */
+  kind?: "order";
 }
 
 export function billToExportable(bill: Bill): ExportableBill {
@@ -64,6 +67,7 @@ export function billToExportable(bill: Bill): ExportableBill {
     change: bill.change,
     cashierId: bill.cashierId,
     lines: bill.lines,
+    ...(bill.kind === "order" ? { kind: "order" as const } : {}),
   };
 }
 
@@ -85,6 +89,7 @@ export function journalToExportable(entry: JournalEntry): ExportableBill {
     change: entry.change,
     cashierId: entry.cashierId,
     lines: entry.lines,
+    ...(entry.kind === "order" ? { kind: "order" as const } : {}),
   };
 }
 
@@ -96,7 +101,7 @@ export function billsToCsv(bills: ExportableBill[]): string {
   const rows = bills.map((b) => {
     const at = new Date(b.createdAt);
     return [
-      b.no,
+      b.kind === "order" ? orderLabel(b.no) : b.no,
       Number.isFinite(b.createdAt) && b.createdAt > 0 ? localDateKey(b.createdAt) : "",
       Number.isFinite(b.createdAt) && b.createdAt > 0 ? at.toTimeString().slice(0, 8) : "",
       b.status,
