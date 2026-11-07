@@ -542,6 +542,12 @@ export default function BillsPage() {
               This marks the bill as void and cannot be undone. The receipt stays on record but no
               longer counts toward sales.
             </p>
+            {confirmingVoid.kind === "order" && (
+              <p className="mt-2 rounded-xl border border-danger/30 bg-danger/5 px-3 py-2 text-sm font-semibold text-danger">
+                This is an advance order&apos;s bill. Deleting it also closes order {billLabel(confirmingVoid)} for good:
+                it can&apos;t be sent out, delivered or changed again.
+              </p>
+            )}
             {voidError && (
               <p role="alert" className="mt-3 text-xs font-bold text-danger">
                 {voidError}

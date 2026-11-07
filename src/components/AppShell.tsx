@@ -51,6 +51,7 @@ const FULL_NAV: NavItem[] = [
   { href: "/orders", label: "Orders", icon: CalendarClock, permission: "manageOrders" },
   { href: "/report", label: "Report", icon: BarChart3 },
   { href: "/products", label: "Products", icon: Package },
+  // Ask is paused (it read too much Firestore); its page shows a notice. See src/app/ask/page.tsx.
   { href: "/profit", label: "Profit", icon: TrendingUp, adminOnly: true },
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/credit", label: "Credit", icon: HandCoins },
@@ -64,6 +65,8 @@ const FULL_NAV: NavItem[] = [
 
 // The bottom bar only ever shows the everyday cashier flow — everything
 // else (Dashboard, Users, sign out) lives in the sidebar/drawer.
+const SUB_ROUTES: Record<string, string[]> = { "/orders": ["/orders/calendar", "/orders/report"] };
+
 const CORE_HREFS = ["/", "/bills", "/products", "/report"];
 
 const SIDEBAR_KEY = "chickenfarm.sidebarCollapsed";
@@ -101,7 +104,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const visible = (item: NavItem) =>
     role === "admin" || (!item.adminOnly && (!item.permission || permissions[item.permission]));
   const items = FULL_NAV.filter(visible);
-  const reachable = items.map((item) => item.href).join(" ");
+  // Sub-pages the drawer doesn't list, warmed along with their parent.
+  const reachable = items
+    .flatMap((item) => [item.href, ...(SUB_ROUTES[item.href] ?? [])])
+    .join(" ");
 
   // <Link> only prefetches what is on screen, and the drawer's links aren't
   // mounted until it opens. Warm every route this user can reach once the

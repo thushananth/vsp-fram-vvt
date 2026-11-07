@@ -7,7 +7,7 @@ import { useLive } from "@/lib/firestore/live";
 import type { Order, OrderLine, OrderLogEntry, OrderStatus } from "@/lib/types";
 
 /**
- * Advance orders. Placing, editing, cancelling and reopening go through Cloud
+ * Advance orders. Placing, editing, cancelling and deleting go through Cloud
  * Functions (functions/src/orders.ts), which number the order and keep its
  * change log. The client itself only sends an order out (with its OR- bill,
  * see createBill in bills.ts) and marks it delivered.
@@ -39,6 +39,8 @@ function toOrder(id: string, d: Record<string, unknown>): Order {
     status: STATUSES.includes(d.status as OrderStatus) ? (d.status as OrderStatus) : "confirmed",
     sendSeq: num(d.sendSeq, 1),
     billId: (d.billId as string | null) ?? null,
+    billVoided: d.billVoided === true,
+    billVoidedAt: numOrNull(d.billVoidedAt),
     trackToken: (d.trackToken as string) ?? "",
     createdAt: num(d.createdAt),
     createdBy: (d.createdBy as string) ?? "",
@@ -111,7 +113,7 @@ export function useOrderLog(orderId: string | null, enabled: boolean): { log: Or
 export interface OrderLineInput {
   productId: string;
   qty: number;
-  /** Admin edits only — the server ignores it when placing. */
+  /** A price typed on the line. Honoured for admins, and for cashiers allowed to change bill prices. */
   price?: number;
 }
 
@@ -123,11 +125,17 @@ export const placeOrder = httpsCallable<
 export const updateOrder = httpsCallable<
   {
     orderId: string;
-    action: "edit" | "cancel" | "reopen";
+    /** "delete": admin only. Once out, it deletes (voids) the OR- bill too. Never on a closed order. */
+    action: "edit" | "cancel" | "delete";
     changes?: { deliveryDate?: string; lines?: OrderLineInput[]; deliveryCharge?: number; notes?: string | null };
     note?: string | null;
   },
-  { changed: boolean }
+  {
+    changed: boolean;
+    /** Delete only: the bill deleted with the order, and the customer's balance either side. */
+    bill: { label: string; total: number; due: number; paid: number; advanceUsed: number } | null;
+    balance: { before: number; after: number } | null;
+  }
 >(functions, "updateOrder");
 
 /**

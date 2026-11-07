@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test:rules": "firebase emulators:exec --only firestore,storage --project demo-vsp-rules \"node --test tests/rules/firestore.test.mjs\"",
-    "test:orders": "test ! -f functions/.secret.local || { echo \"functions/.secret.local exists: the emulator would send real SMS. Move it aside first.\"; exit 1; }; cd functions && npm run build && cd .. && firebase emulators:exec --only auth,firestore,functions --project demo-vsp-e2e \"node tests/orders-e2e.mjs\""
+    "test:orders": "test ! -f functions/.secret.local || { echo \"functions/.secret.local exists: the emulator would send real SMS. Move it aside first.\"; exit 1; }; cd functions && npm run build && cd .. && firebase emulators:exec --only auth,firestore,functions --project demo-vsp-e2e \"node tests/orders-e2e.mjs\"",
+    "test:assistant": "TZ=Asia/Colombo node --import tsx --test tests/assistant/*.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -32,6 +33,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }

@@ -4,6 +4,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { Timestamp, type DocumentReference, type Transaction } from "firebase-admin/firestore";
 import { db } from "./db";
+import type { PdfBill } from "./billPdf";
 import { CONTACT_LINE, SHOP_NAME, greeting, normalizeMobile, rs, sendSms, smslenzApiKey } from "./sms";
 
 /**
@@ -12,8 +13,11 @@ import { CONTACT_LINE, SHOP_NAME, greeting, normalizeMobile, rs, sendSms, smslen
  *   placeOrder   (callable)  numbers it OR-0043, writes the order, its public
  *                            tracking copy and the first log entry, texts the
  *                            customer "confirmed" with the track link.
- *   updateOrder  (callable)  admin only: edit / reschedule / cancel / reopen,
- *                            every change logged with before and after.
+ *   updateOrder  (callable)  admin only: edit / reschedule / cancel, every
+ *                            change logged with before and after; delete,
+ *                            which also deletes (voids) a bill it went out with.
+ *   onOrderBillVoided        its OR- bill deleted on Bills: the order is closed
+ *                            for good (billVoided), no action works on it.
  *   onOrderStatusChanged     the till moves an order to "out" (in the same
  *                            batch as its OR- bill) and later "delivered";
  *                            this logs it, updates tracking, texts the customer.
@@ -136,6 +140,8 @@ interface Actor {
   uid: string;
   name: string;
   admin: boolean;
+  /** May set a line's price: every admin, and a cashier unless editBillPrices is off (same switch as the till). */
+  canPrice: boolean;
 }
 
 /** Active staff who may handle orders: every admin, and a cashier unless an admin switched manageOrders off. */
@@ -145,26 +151,43 @@ async function orderActor(uid: string | undefined, { adminOnly = false } = {}): 
   if (!profile || profile.active === false) throw new HttpsError("permission-denied", "This account can't manage orders");
   const admin = profile.role === "admin";
   if (adminOnly && !admin) throw new HttpsError("permission-denied", "Only an admin can change a confirmed order");
+  let canPrice = admin;
   if (!admin) {
     const perms = (await db.doc("settings/cashierPermissions").get()).data();
     if (perms?.manageOrders === false) throw new HttpsError("permission-denied", "Orders are switched off for cashiers");
+    canPrice = perms?.editBillPrices !== false;
   }
-  return { uid, name: typeof profile.name === "string" ? profile.name : "", admin };
+  return { uid, name: typeof profile.name === "string" ? profile.name : "", admin, canPrice };
 }
 
 // ── Messages (keep in step with the previews in src/lib/orders.ts) ───────
 
-function confirmedText(customer: FirebaseFirestore.DocumentData | undefined, no: number, date: string, token: string) {
-  return `${greeting(customer)}, your order ${orderLabel(no)} is confirmed for ${prettyDate(date)}.\nTrack: ${trackLink(token)}\n${CONTACT_LINE}`;
+/** What the customer owes the shop right now, or null when nothing (or an advance). */
+function owedBalance(customer: FirebaseFirestore.DocumentData | undefined): number | null {
+  const owed = typeof customer?.remainingCredit === "number" ? customer.remainingCredit : 0;
+  return Math.round(owed) > 0 ? owed : null;
 }
 
-function outText(no: number, total: number, deliveryCharge: number, token: string) {
+/** Same wording as the till's bill SMS (billMessage in sms.ts). */
+function balanceLine(owed: number | null): string {
+  return owed !== null ? `\nTotal balance owing: ${rs(owed)}` : "";
+}
+
+export function confirmedText(customer: FirebaseFirestore.DocumentData | undefined, no: number, date: string, token: string) {
+  return `${greeting(customer)}, your order ${orderLabel(no)} is confirmed for ${prettyDate(date)}.${balanceLine(owedBalance(customer))}\nTrack: ${trackLink(token)}\n${CONTACT_LINE}`;
+}
+
+/**
+ * The send-out batch already added this bill's due to the customer's balance,
+ * so `owed` is the whole balance including this order. Not added again here.
+ */
+export function outText(no: number, total: number, deliveryCharge: number, token: string, owed: number | null = null) {
   const delivery = deliveryCharge > 0 ? ` (incl. delivery ${rs(deliveryCharge)})` : "";
-  return `Your order ${orderLabel(no)} is on the way.\nTotal: ${rs(total)}${delivery}\nTrack: ${trackLink(token)}\n${CONTACT_LINE}`;
+  return `Your order ${orderLabel(no)} is on the way.\nTotal: ${rs(total)}${delivery}${balanceLine(owed)}\nTrack: ${trackLink(token)}\n${CONTACT_LINE}`;
 }
 
-function deliveredText(no: number) {
-  return `Order ${orderLabel(no)} delivered. Thank you for ordering with us!\n${CONTACT_LINE}`;
+function deliveredText(no: number, owed: number | null = null) {
+  return `Order ${orderLabel(no)} delivered.${balanceLine(owed)}\nThank you for ordering with us!\n${CONTACT_LINE}`;
 }
 
 function rescheduledText(no: number, date: string, token: string) {
@@ -243,9 +266,10 @@ interface OrderLine {
 }
 
 /**
- * Names, units and prices always come from the product records, never from
- * the browser. An admin editing an order may set a line's price; otherwise a
- * product already on the order keeps the price it was booked at.
+ * Names and units always come from the product records, never from the
+ * browser. Prices do too, unless the caller may set them (admin, or a cashier
+ * allowed to change bill prices, booking; admin, editing); otherwise a product
+ * already on the order keeps the price it was booked at.
  */
 async function buildLines(
   tx: Transaction,
@@ -350,7 +374,8 @@ export const placeOrder = onCall<{
     const [counter, customerSnap] = await Promise.all([tx.get(counterRef), tx.get(db.doc(`customers/${customerId}`))]);
     const customer = customerSnap.data();
     if (!customer || customer.active === false) throw new HttpsError("failed-precondition", "That customer no longer exists");
-    const lines = await buildLines(tx, data.lines, { allowPrice: false, booked: new Map() });
+    // A price typed while booking (as on the till) counts only for staff allowed to change bill prices.
+    const lines = await buildLines(tx, data.lines, { allowPrice: actor.canPrice, booked: new Map() });
 
     const orderNo = ((counter.data()?.seq as number | undefined) ?? 0) + 1;
     tx.set(counterRef, { seq: orderNo }, { merge: true });
@@ -412,7 +437,7 @@ export const placeOrder = onCall<{
 
 // ── updateOrder (admin only) ─────────────────────────────────────────────
 
-type UpdateAction = "edit" | "cancel" | "reopen";
+type UpdateAction = "edit" | "cancel" | "delete";
 
 export const updateOrder = onCall<{
   orderId: string;
@@ -423,10 +448,14 @@ export const updateOrder = onCall<{
   const actor = await orderActor(request.auth?.uid, { adminOnly: true });
   const { orderId, action } = request.data ?? ({} as { orderId?: string; action?: string });
   if (typeof orderId !== "string" || !orderId || orderId.includes("/")) throw new HttpsError("invalid-argument", "orderId is required");
-  if (action !== "edit" && action !== "cancel" && action !== "reopen") throw new HttpsError("invalid-argument", "Unknown action");
+  if (action !== "edit" && action !== "cancel" && action !== "delete") {
+    throw new HttpsError("invalid-argument", "Unknown action");
+  }
   const note = cleanNotes(request.data?.note);
   const orderRef = db.doc(`orders/${orderId}`);
   const now = Date.now();
+
+  if (action === "delete") return deleteOrder(orderRef, actor, note);
 
   const result = await db.runTransaction(async (tx) => {
     const snap = await tx.get(orderRef);
@@ -447,36 +476,6 @@ export const updateOrder = onCall<{
         changes: [{ field: "status", before: "confirmed", after: "cancelled" }], note,
       });
       return { kind: "cancel" as const, order };
-    }
-
-    if (action === "reopen") {
-      if (order.status !== "out" && order.status !== "delivered") {
-        throw new HttpsError("failed-precondition", "Only an order that went out can be reopened");
-      }
-      const bill = order.billId ? (await tx.get(db.doc(`bills/${order.billId}`))).data() : undefined;
-      if (bill && bill.status !== "void") {
-        throw new HttpsError("failed-precondition", "Delete (void) its bill first, then reopen the order");
-      }
-      tx.update(orderRef, {
-        status: "confirmed",
-        sendSeq: ((order.sendSeq as number | undefined) ?? 1) + 1,
-        billId: null,
-        outAt: null, outBy: null, deliveredAt: null, deliveredBy: null,
-        updatedAt: now, updatedBy: actor.uid,
-      });
-      tx.set(trackRef, {
-        orderNo: order.orderNo,
-        status: "confirmed",
-        deliveryDate: order.deliveryDate,
-        lines: trackingLines(order.lines ?? []),
-        statusAt: { confirmed: order.createdAt ?? now },
-        updatedAt: now,
-      });
-      tx.set(logRef(orderRef), {
-        at: now, by: actor.uid, byName: actor.name, action: "reopened",
-        changes: [{ field: "status", before: String(order.status), after: "confirmed" }], note,
-      });
-      return { kind: "reopen" as const, order };
     }
 
     // edit
@@ -544,8 +543,102 @@ export const updateOrder = onCall<{
     const { contact } = await customerContact(order.customerId);
     await textQuietly(contact, rescheduledText(order.orderNo, result.newDate, order.trackToken));
   }
-  return { changed: result.kind !== "none" };
+  return { changed: result.kind !== "none", bill: null, balance: null };
 });
+
+export interface DeleteResult {
+  changed: true;
+  /** The OR- bill deleted with it, if it had gone out. */
+  bill: { label: string; total: number; due: number; paid: number; advanceUsed: number } | null;
+  /** The customer's balance either side of it; null when it didn't move. */
+  balance: { before: number; after: number } | null;
+}
+
+/**
+ * Admin only. Before it goes out (confirmed or cancelled) there is no bill and
+ * nothing in the books changes. Once it has gone out, its OR- bill is deleted
+ * (voided) in the same transaction, exactly as Delete on Bills does it
+ * (voidBill in src/lib/firestore/bills.ts, keep in step): its unpaid part
+ * comes off the customer's balance, advance spent on it goes back, and what
+ * was already paid stays paid. The bill stays on Bills as deleted.
+ *
+ * The order, its change log and the customer's tracking link all go; the OR-
+ * number is not reused, and orderDeletions/{orderId} records who, what, why.
+ * An order already closed (its bill deleted on Bills) can't be touched.
+ * No SMS: cancel first if the customer should hear.
+ */
+async function deleteOrder(orderRef: DocumentReference, actor: Actor, note: string | null): Promise<DeleteResult> {
+  const now = Date.now();
+  const result = await db.runTransaction(async (tx) => {
+    const o = (await tx.get(orderRef)).data();
+    if (!o) throw new HttpsError("not-found", "Order not found");
+    if (o.billVoided === true) throw new HttpsError("failed-precondition", "This order is closed: its bill was deleted on Bills.");
+
+    const billRef = typeof o.billId === "string" && o.billId ? db.doc(`bills/${o.billId}`) : null;
+    if ((o.status === "out" || o.status === "delivered") && !billRef) {
+      throw new HttpsError("failed-precondition", "This order went out without a bill. Check Bills first.");
+    }
+    const bill = billRef ? (await tx.get(billRef)).data() : undefined;
+    if (billRef && (!bill || bill.orderId !== orderRef.id)) throw new HttpsError("failed-precondition", "Its bill can't be found");
+
+    let voided: DeleteResult["bill"] = null;
+    let balance: DeleteResult["balance"] = null;
+    if (billRef && bill && bill.status !== "void") {
+      const due = typeof bill.due === "number" ? bill.due : 0;
+      const advanceUsed = typeof bill.advanceUsed === "number" ? bill.advanceUsed : 0;
+      const customerRef = typeof bill.customerId === "string" && bill.customerId ? db.doc(`customers/${bill.customerId}`) : null;
+      const customer = customerRef && (due > 0 || advanceUsed > 0) ? (await tx.get(customerRef)).data() : undefined;
+      tx.set(billRef, { status: "void", due: 0 }, { merge: true });
+      if (customerRef && (due > 0 || advanceUsed > 0)) {
+        const credit = typeof customer?.remainingCredit === "number" ? customer.remainingCredit : 0;
+        const advance = typeof customer?.advance === "number" ? customer.advance : 0;
+        const after = Math.max(0, credit - due);
+        tx.set(
+          customerRef,
+          {
+            ...(due > 0 ? { remainingCredit: after } : {}),
+            ...(advanceUsed > 0 ? { advance: round2(advance + advanceUsed) } : {}),
+            updatedAt: now,
+          },
+          { merge: true },
+        );
+        if (due > 0) balance = { before: credit, after };
+      }
+      voided = {
+        label: orderLabel(o.orderNo),
+        total: typeof bill.total === "number" ? bill.total : 0,
+        due,
+        paid: typeof bill.paid === "number" ? bill.paid : 0,
+        advanceUsed,
+      };
+    }
+
+    tx.set(db.doc(`orderDeletions/${orderRef.id}`), {
+      at: now,
+      by: actor.uid,
+      byName: actor.name,
+      note,
+      orderNo: o.orderNo,
+      customerId: o.customerId,
+      customerName: o.customerName ?? "",
+      deliveryDate: o.deliveryDate,
+      status: o.status,
+      lines: o.lines ?? [],
+      deliveryCharge: o.deliveryCharge ?? 0,
+      createdAt: o.createdAt ?? null,
+      billId: o.billId ?? null,
+      billVoided: voided,
+      balance,
+    });
+    if (typeof o.trackToken === "string" && TOKEN_RE.test(o.trackToken)) tx.delete(db.doc(`orderTracking/${o.trackToken}`));
+    tx.delete(orderRef);
+    return { orderNo: o.orderNo as number, bill: voided, balance };
+  });
+  // The log subcollection outlives a plain delete; drop it after the commit.
+  await db.recursiveDelete(orderRef.collection("log"));
+  console.log(`order ${orderLabel(result.orderNo)} deleted by ${actor.uid}${result.bill ? " with its bill" : ""}`);
+  return { changed: true, bill: result.bill, balance: result.balance };
+}
 
 // ── The till sends it out / marks it delivered ───────────────────────────
 
@@ -635,8 +728,8 @@ export const onOrderStatusChanged = onDocumentUpdated(
 
       const settings = await orderSettings();
       if (!settings.smsOut || bill.smsSentAt) return;
-      const { contact } = await customerContact(after.customerId);
-      if (await textQuietly(contact, outText(after.orderNo, bill.total ?? 0, deliveryCharged, after.trackToken))) {
+      const { data: customer, contact } = await customerContact(after.customerId);
+      if (await textQuietly(contact, outText(after.orderNo, bill.total ?? 0, deliveryCharged, after.trackToken, owedBalance(customer)))) {
         await billRef.update({ smsSentAt: Date.now(), smsTo: contact });
       }
       return;
@@ -659,9 +752,55 @@ export const onOrderStatusChanged = onDocumentUpdated(
       );
       const settings = await orderSettings();
       if (!settings.smsDelivered) return;
-      const { contact } = await customerContact(after.customerId);
-      await textQuietly(contact, deliveredText(after.orderNo));
+      const { data: customer, contact } = await customerContact(after.customerId);
+      await textQuietly(contact, deliveredText(after.orderNo, owedBalance(customer)));
     }
+  },
+);
+
+/**
+ * An OR- bill deleted (voided) on Bills closes its order for good: flagged
+ * billVoided, shown as "Closed · bill deleted", and no action (deliver, edit,
+ * cancel, delete) works on it any more. The customer's track page shows it
+ * cancelled and stops offering the bill.
+ */
+export const onOrderBillVoided = onDocumentUpdated(
+  { document: "bills/{billId}", region: "asia-southeast1" },
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!before || !after || after.kind !== "order" || typeof after.orderId !== "string") return;
+    if (before.status === "void" || after.status !== "void") return;
+    const billId = event.params.billId;
+    const orderRef = db.doc(`orders/${after.orderId}`);
+    const now = Date.now();
+    const flagged = await db.runTransaction(async (tx) => {
+      const order = (await tx.get(orderRef)).data();
+      // Deleted with its order, or another send-out's bill: nothing to flag.
+      if (!order || order.billId !== billId || order.billVoided === true) return null;
+      // Closed for good. The status stays what it was (out / delivered) for the
+      // record; billVoided is what every screen and rule reads as "closed".
+      tx.update(orderRef, { billVoided: true, billVoidedAt: now, updatedAt: now });
+      if (typeof order.trackToken === "string" && TOKEN_RE.test(order.trackToken)) {
+        // The customer's page shows it as cancelled, and the link winds down.
+        tx.set(
+          db.doc(`orderTracking/${order.trackToken}`),
+          { billVoided: true, status: "cancelled", "statusAt.cancelled": now, expireAt: Timestamp.fromMillis(now + TRACK_KEEP_MS), updatedAt: now },
+          { merge: true },
+        );
+      }
+      return order;
+    });
+    if (!flagged) return;
+    // The void itself carries no "who"; Bills keeps that.
+    await claimLog(logRef(orderRef, `billvoid-${billId}`), {
+      at: now,
+      by: "",
+      byName: "",
+      action: "billVoided",
+      changes: [{ field: "bill", before: orderLabel(flagged.orderNo), after: "deleted" }],
+      note: null,
+    });
   },
 );
 
@@ -710,11 +849,63 @@ export const orderAlertMorning = onSchedule(
 // ── Public track endpoint ────────────────────────────────────────────────
 
 /**
+ * The OR- bill behind a track link, as the customer's PDF. Only the bill the
+ * order currently points at, and only while it stands (not voided).
+ */
+async function trackedBillPdf(token: string): Promise<{ name: string; body: Buffer } | null> {
+  const orders = await db.collection("orders").where("trackToken", "==", token).limit(1).get();
+  const orderSnap = orders.docs[0];
+  const order = orderSnap?.data();
+  if (!order || typeof order.billId !== "string" || order.billVoided === true) return null;
+  const [billSnap, customerSnap] = await Promise.all([
+    db.doc(`bills/${order.billId}`).get(),
+    db.doc(`customers/${order.customerId}`).get(),
+  ]);
+  const bill = billSnap.data();
+  if (!bill || bill.status === "void" || bill.orderId !== orderSnap.id) return null;
+  const units = new Map<string, string>(((order.lines ?? []) as OrderLine[]).map((l) => [l.productId, l.unit]));
+  const customer = customerSnap.data();
+  const credit = customer?.remainingCredit;
+  // A walk-in saved under their number has that number as their name: never print it on a shareable PDF.
+  const rawName = String(bill.customerName ?? order.customerName ?? "").trim();
+  const customerName = customer?.autoNamed === true || /\d{7,}/.test(rawName.replace(/[\s+()-]/g, "")) ? "Customer" : rawName;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const pdfBill: PdfBill = {
+    label: orderLabel(num(bill.no)),
+    createdAt: num(bill.createdAt) || Date.now(),
+    customerName,
+    paymentType: String(bill.paymentType ?? "credit"),
+    status: String(bill.status ?? "paid"),
+    lines: ((bill.lines ?? []) as Record<string, unknown>[]).slice(0, 200).map((l) => ({
+      name: String(l.name ?? ""),
+      qty: num(l.qty),
+      unit: units.get(String(l.productId)) ?? "",
+      price: num(l.price),
+      ...(typeof l.amount === "number" ? { amount: l.amount } : {}),
+      ...(typeof l.listPrice === "number" ? { listPrice: l.listPrice } : {}),
+    })),
+    total: num(bill.total),
+    discount: num(bill.discount),
+    advanceUsed: num(bill.advanceUsed),
+    paid: num(bill.paid),
+    due: num(bill.due),
+    tender: num(bill.tender),
+    change: num(bill.change),
+    customerCredit: typeof credit === "number" ? credit : null,
+  };
+  // jsPDF loads only here, so no other function pays for it on a cold start.
+  const { billPdf, fileName } = await import("./billPdf");
+  return { name: fileName(pdfBill), body: billPdf(pdfBill) };
+}
+
+/**
  * GET /api/track?k=<22-char token> (Hosting rewrites it here, same origin).
  * Returns only what the customer's own page shows: no customer name, mobile,
  * price or ids. Every miss looks the same, so probing learns nothing.
+ * &bill=pdf returns the bill itself (prices, name, balance; never the mobile)
+ * once the order is out, while its bill stands.
  */
-export const trackOrder = onRequest({ maxInstances: 3, concurrency: 40 }, async (req, res) => {
+export const trackOrder = onRequest({ maxInstances: 3, concurrency: 40, memory: "512MiB" }, async (req, res) => {
   res.set("Cache-Control", "private, no-store");
   res.set("X-Robots-Tag", "noindex, nofollow");
   res.set("X-Content-Type-Options", "nosniff");
@@ -736,7 +927,20 @@ export const trackOrder = onRequest({ maxInstances: 3, concurrency: 40 }, async 
     notFound();
     return;
   }
+  const hasBill = (t.status === "out" || t.status === "delivered") && t.billVoided !== true;
+  if (req.query.bill === "pdf") {
+    const pdf = hasBill ? await trackedBillPdf(k) : null;
+    if (!pdf) {
+      notFound();
+      return;
+    }
+    res.set("Content-Type", "application/pdf");
+    res.set("Content-Disposition", `attachment; filename="${pdf.name}"`);
+    res.send(pdf.body);
+    return;
+  }
   res.json({
+    hasBill,
     shop: SHOP_NAME,
     contact: CONTACT_LINE,
     order: orderLabel(t.orderNo),

@@ -191,6 +191,9 @@ export interface Order {
    *  bill gets a fresh id: `${id}-${sendSeq}`. */
   sendSeq: number;
   billId: string | null;
+  /** Set by the server when that bill was deleted (voided) on Bills; cleared on reopen. */
+  billVoided: boolean;
+  billVoidedAt: number | null;
   /** Secret in the customer's track link. */
   trackToken: string;
   createdAt: number;
@@ -216,7 +219,7 @@ export interface OrderLogEntry {
   at: number;
   by: string;
   byName: string;
-  action: "placed" | "edited" | "rescheduled" | "cancelled" | "reopened" | "out" | "delivered";
+  action: "placed" | "edited" | "rescheduled" | "cancelled" | "reopened" | "out" | "delivered" | "billVoided";
   changes: OrderChange[];
   note: string | null;
 }

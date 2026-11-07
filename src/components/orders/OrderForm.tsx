@@ -1,29 +1,31 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Search, Trash2, X } from "lucide-react";
 import { useCustomers } from "@/lib/firestore/customers";
 import { useProducts } from "@/lib/firestore/products";
 import { placeOrder, updateOrder, type OrderLineInput } from "@/lib/firestore/orders";
+import { usePermissions } from "@/lib/firestore/permissions";
+import { round2 } from "@/lib/billLines";
+import LineSheet from "@/components/LineSheet";
 import { useCustomerLabel } from "@/lib/customerName";
 import { useOnline } from "@/lib/online";
 import { localDateKey, money } from "@/lib/format";
 import { dateKeyAdd, orderLabel, qtyText, relativeDay, shortDate } from "@/lib/orders";
 import PadSheet from "@/components/orders/PadSheet";
-import type { Order } from "@/lib/types";
+import type { BillLine, Order } from "@/lib/types";
 
 interface DraftLine {
   key: string;
   productId: string;
   qty: number;
-  /** Admin edits only: a price set by hand. Undefined keeps the booked / list price. */
+  /** A price typed on the line sheet. Undefined keeps the booked / list price. */
   price?: number;
+  /** "Rs 5000 of chicken": the amount typed; qty was worked out from it. Shown, not stored on the order. */
+  amount?: number;
 }
 
-type Pad =
-  | { kind: "qty"; key: string }
-  | { kind: "price"; key: string }
-  | { kind: "charge" };
+type Pad = { kind: "charge" };
 
 let lineSeq = 0;
 const newKey = () => `l${Date.now()}-${lineSeq++}`;
@@ -50,6 +52,10 @@ export default function OrderForm({
   const { customers, loading: customersLoading } = useCustomers();
   const { products } = useProducts();
   const { label } = useCustomerLabel();
+  const { permissions } = usePermissions();
+  // Same switch as the till: admins, and cashiers allowed to change bill prices.
+  // Editing a confirmed order is admin only anyway.
+  const canEditPrice = isAdmin || (!editing && permissions.editBillPrices);
 
   const [customerId, setCustomerId] = useState<string | null>(order?.customerId ?? null);
   const [customerSearch, setCustomerSearch] = useState("");
@@ -61,6 +67,10 @@ export default function OrderForm({
   const [notes, setNotes] = useState(order?.notes ?? "");
   const [productSearch, setProductSearch] = useState("");
   const [pad, setPad] = useState<Pad | null>(null);
+  /** The line open in the line sheet. */
+  const [sheet, setSheet] = useState<{ key: string } | null>(null);
+  /** A product just tapped in: closing its sheet without Done drops it (as on the till). */
+  const freshRef = useRef<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,13 +92,23 @@ export default function OrderForm({
 
   /** The price a line is booked at: set by hand (admin), kept from the order, or today's list price. */
   const priceOf = (l: DraftLine) => l.price ?? bookedPrice.get(l.productId) ?? productById.get(l.productId)?.price ?? 0;
-  const estimate = Math.round((lines.reduce((s, l) => s + priceOf(l) * l.qty, 0) + charge) * 100) / 100;
+  const lineTotal = (l: DraftLine) => l.amount ?? round2(priceOf(l) * l.qty);
+  const estimate = round2(lines.reduce((s, l) => s + lineTotal(l), 0) + charge);
 
+  /** Like the till: tapping a product adds it and opens its line sheet. */
   function addProduct(productId: string) {
     const key = newKey();
     setLines((prev) => [...prev, { key, productId, qty: 1 }]);
-    setPad({ kind: "qty", key });
+    freshRef.current = key;
+    setSheet({ key });
     setProductSearch("");
+  }
+
+  function closeSheet() {
+    const fresh = freshRef.current;
+    freshRef.current = null;
+    if (fresh !== null && fresh === sheet?.key) setLines((prev) => prev.filter((x) => x.key !== fresh));
+    setSheet(null);
   }
 
   const dateChips = [1, 2, 3, 7].map((n) => dateKeyAdd(today, n));
@@ -105,7 +125,7 @@ export default function OrderForm({
     const payload: OrderLineInput[] = lines.map((l) => ({
       productId: l.productId,
       qty: l.qty,
-      ...(editing && isAdmin && l.price !== undefined ? { price: l.price } : {}),
+      ...(canEditPrice && l.price !== undefined ? { price: l.price } : {}),
     }));
     try {
       if (order) {
@@ -139,8 +159,25 @@ export default function OrderForm({
     }
   }
 
-  const padLine = pad && pad.kind !== "charge" ? lines.find((l) => l.key === pad.key) : undefined;
-  const padProduct = padLine ? productById.get(padLine.productId) : undefined;
+  const sheetLine = sheet ? lines.find((l) => l.key === sheet.key) : undefined;
+  const sheetProduct = sheetLine ? productById.get(sheetLine.productId) : undefined;
+  const nameOf = (l: DraftLine) =>
+    productById.get(l.productId)?.name ?? order?.lines.find((x) => x.productId === l.productId)?.name ?? "Removed product";
+  const unitOf = (l: DraftLine) =>
+    productById.get(l.productId)?.unit ?? order?.lines.find((x) => x.productId === l.productId)?.unit ?? "";
+  /** The draft as the till's line sheet sees it. */
+  const asBillLine = (l: DraftLine): BillLine => {
+    const list = productById.get(l.productId)?.price;
+    const price = priceOf(l);
+    return {
+      productId: l.productId,
+      name: nameOf(l),
+      qty: l.qty,
+      price,
+      ...(l.amount !== undefined ? { amount: l.amount } : {}),
+      ...(list !== undefined && list !== price ? { listPrice: list } : {}),
+    };
+  };
 
   return (
     <div className="fixed inset-0 z-40 flex items-end justify-center bg-ink/50 sm:items-center sm:p-4">
@@ -149,7 +186,7 @@ export default function OrderForm({
           <div>
             <h2 className="text-xl font-extrabold">{order ? `Change ${orderLabel(order.orderNo)}` : "New order"}</h2>
             <p className="text-sm font-medium text-muted">
-              {order ? "Every change is logged" : "Prices are worked out on the delivery day"}
+              {order ? "Every change is logged" : "Weighed and billed on the delivery day"}
             </p>
           </div>
           <button
@@ -267,38 +304,34 @@ export default function OrderForm({
             {lines.length > 0 && (
               <ul className="flex flex-col gap-1.5">
                 {lines.map((l) => {
-                  const p = productById.get(l.productId);
-                  const name = p?.name ?? order?.lines.find((x) => x.productId === l.productId)?.name ?? "Removed product";
-                  const unit = p?.unit ?? order?.lines.find((x) => x.productId === l.productId)?.unit ?? "";
+                  const name = nameOf(l);
+                  const unit = unitOf(l);
+                  const custom = l.price !== undefined && l.price !== productById.get(l.productId)?.price;
                   return (
-                    <li key={l.key} className="flex items-center gap-2 rounded-xl border border-border px-3 py-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-bold">{name}</div>
-                        <div className="tabular-nums text-xs font-medium text-muted">
-                          about {money(priceOf(l))}/{unit || "unit"}
-                        </div>
-                      </div>
-                      {editing && isAdmin && (
-                        <button
-                          type="button"
-                          onClick={() => setPad({ kind: "price", key: l.key })}
-                          className="tabular-nums min-h-[44px] rounded-xl border border-border px-3 text-sm font-bold"
-                        >
-                          {money(priceOf(l))}
-                        </button>
-                      )}
+                    <li key={l.key} className="flex items-stretch gap-1 rounded-xl border border-border">
                       <button
                         type="button"
-                        onClick={() => setPad({ kind: "qty", key: l.key })}
-                        className="tabular-nums min-h-[44px] min-w-[84px] rounded-xl bg-ground px-3 text-base font-extrabold"
+                        onClick={() => {
+                          freshRef.current = null;
+                          setSheet({ key: l.key });
+                        }}
+                        className="flex min-h-[56px] min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left active:bg-ground"
                       >
-                        {qtyText(l.qty, unit)}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-bold">{name}</span>
+                          <span className={`tabular-nums block text-xs font-medium ${custom ? "text-warning" : "text-muted"}`}>
+                            {qtyText(l.qty, unit)} × {money(priceOf(l))}
+                            {custom && " · own price"}
+                            {l.amount !== undefined && " · by amount"}
+                          </span>
+                        </span>
+                        <span className="tabular-nums shrink-0 text-base font-extrabold">{money(lineTotal(l))}</span>
                       </button>
                       <button
                         type="button"
                         aria-label={`Remove ${name}`}
                         onClick={() => setLines((prev) => prev.filter((x) => x.key !== l.key))}
-                        className="flex h-11 w-11 items-center justify-center rounded-xl text-muted-2 active:bg-ground"
+                        className="flex w-11 shrink-0 items-center justify-center rounded-r-xl text-muted-2 active:bg-ground"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -386,33 +419,41 @@ export default function OrderForm({
         </div>
       </div>
 
-      {pad?.kind === "qty" && padLine && (
-        <PadSheet
-          title={padProduct?.name ?? "Quantity"}
-          hint="Roughly how much — it's weighed on the day"
-          initial={padLine.qty}
-          decimals={padProduct?.unit === "kg" ? 3 : 0}
-          suffix={padProduct?.unit}
-          onClose={() => setPad(null)}
-          onDone={(qty) => {
-            setLines((prev) => prev.map((x) => (x.key === padLine.key ? { ...x, qty } : x)));
-            setPad(null);
+      {sheet && sheetLine && (
+        <LineSheet
+          key={sheetLine.key}
+          layer="z-50"
+          line={asBillLine(sheetLine)}
+          unit={unitOf(sheetLine)}
+          imageUrl={sheetProduct?.imageUrl ?? null}
+          canEditPrice={canEditPrice}
+          scope="this order only"
+          removeLabel="Remove from order"
+          priceLockedNote={
+            editing ? "Only an admin can change prices on an order." : "Price changes are off for cashiers — an admin can allow them in Settings."
+          }
+          onRemove={() => {
+            setLines((prev) => prev.filter((x) => x.key !== sheetLine.key));
+            setSheet(null);
           }}
-        />
-      )}
-      {pad?.kind === "price" && padLine && (
-        <PadSheet
-          title={`Price · ${padProduct?.name ?? ""}`}
-          hint="Booked price for this order only"
-          initial={priceOf(padLine)}
-          decimals={2}
-          prefix="Rs"
-          allowZero
-          onClose={() => setPad(null)}
-          onDone={(price) => {
-            setLines((prev) => prev.map((x) => (x.key === padLine.key ? { ...x, price } : x)));
-            setPad(null);
+          onApply={(e) => {
+            freshRef.current = null;
+            setLines((prev) =>
+              prev.map((x) =>
+                x.key === sheetLine.key
+                  ? {
+                      ...x,
+                      qty: e.qty,
+                      // Kept only when it differs from what the line would be priced at anyway.
+                      price: canEditPrice && e.price !== priceOf({ ...x, price: undefined }) ? e.price : undefined,
+                      amount: e.amount,
+                    }
+                  : x,
+              ),
+            );
+            setSheet(null);
           }}
+          onClose={closeSheet}
         />
       )}
       {pad?.kind === "charge" && (

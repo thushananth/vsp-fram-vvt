@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { lineAmount } from "@/lib/billLines";
+import { buildProfit } from "@/lib/profit";
 import { useAdminGate } from "@/components/AdminGate";
 import { Search, TriangleAlert } from "lucide-react";
 import { useBills } from "@/lib/firestore/bills";
@@ -10,7 +10,6 @@ import ProductThumb from "@/components/ui/ProductThumb";
 import Stat from "@/components/ui/Stat";
 import { money, todayKey } from "@/lib/format";
 import { resolveRange, type RangeMode } from "@/lib/dateRanges";
-import type { Product } from "@/lib/types";
 
 const RANGE_OPTIONS: { mode: RangeMode; label: string }[] = [
   { mode: "today", label: "Today" },
@@ -29,28 +28,8 @@ function qtyText(qty: number): string {
   return qty.toLocaleString("en-LK", { maximumFractionDigits: 3 });
 }
 
-interface ProductProfit {
-  productId: string;
-  name: string;
-  product: Product | undefined;
-  qty: number;
-  revenue: number;
-  cost: number;
-  profit: number;
-  /** True when any line fell back to the product's *current* cost price. */
-  estimated: boolean;
-}
-
-/**
- * Margin, by product and in total. Admin-only, like every other place cost
- * price is shown.
- *
- * Profit is measured line by line against `costPrice` as it was **stamped on
- * the line at the moment of sale**. Reading cost off the product instead would
- * silently re-price last month's margin every time the bakery changes what it
- * charges. Bills written before that field existed fall back to the product's
- * current cost and are marked estimated, rather than counted as pure profit.
- */
+/** Margin, by product and in total. Admin-only, like every other place cost
+ * price is shown. The maths lives in buildProfit (src/lib/profit.ts). */
 export default function ProfitPage() {
   const gate = useAdminGate("Profit", "It shows what the shop pays for stock, so it stays off the till.");
   const today = todayKey();
@@ -69,56 +48,10 @@ export default function ProfitPage() {
 
   const productsById = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
 
-  const { rows, totals } = useMemo(() => {
-    const byProduct = new Map<string, ProductProfit>();
-    let revenue = 0;
-    let cost = 0;
-    let estimatedLines = 0;
-
-    const inRange = bills.filter(
-      (b) => b.status === "paid" && b.createdAt >= range.startMs && b.createdAt < range.endMs,
-    );
-
-    for (const bill of inRange) {
-      for (const lineItem of bill.lines) {
-        const product = productsById.get(lineItem.productId);
-        const stamped = lineItem.costPrice;
-        const unitCost = stamped ?? product?.costPrice ?? 0;
-        const isEstimate = stamped === undefined;
-        if (isEstimate) estimatedLines += 1;
-
-        const lineRevenue = lineAmount(lineItem);
-        const lineCost = unitCost * lineItem.qty;
-        revenue += lineRevenue;
-        cost += lineCost;
-
-        const existing = byProduct.get(lineItem.productId);
-        if (existing) {
-          existing.qty += lineItem.qty;
-          existing.revenue += lineRevenue;
-          existing.cost += lineCost;
-          existing.profit += lineRevenue - lineCost;
-          existing.estimated = existing.estimated || isEstimate;
-        } else {
-          byProduct.set(lineItem.productId, {
-            productId: lineItem.productId,
-            name: lineItem.name,
-            product,
-            qty: lineItem.qty,
-            revenue: lineRevenue,
-            cost: lineCost,
-            profit: lineRevenue - lineCost,
-            estimated: isEstimate,
-          });
-        }
-      }
-    }
-
-    return {
-      rows: [...byProduct.values()].sort((a, b) => b.profit - a.profit),
-      totals: { revenue, cost, profit: revenue - cost, bills: inRange.length, estimatedLines },
-    };
-  }, [bills, productsById, range]);
+  const { rows, totals } = useMemo(
+    () => buildProfit({ bills, productsById, startMs: range.startMs, endMs: range.endMs }),
+    [bills, productsById, range],
+  );
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();

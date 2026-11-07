@@ -90,6 +90,8 @@ await adb.doc("customers/kumar").set({
   name: "Kumar Stores", type: "shop", mobileNumber: "0771234567", remainingCredit: 0, openingBalance: 0, active: true, createdAt: 1, updatedAt: 1,
 });
 await adb.doc("settings/store").set({ orderSmsConfirmed: true, orderSmsOut: true });
+// Bill price changes off for cashiers to begin with: a typed price must then be ignored.
+await adb.doc("settings/cashierPermissions").set({ editBillPrices: false });
 
 console.log("advance orders, end to end", { AUTH_HOST, FS_HOST, FN_HOST });
 
@@ -104,7 +106,7 @@ const placed = (
   await placeOrder({
     customerId: "kumar",
     deliveryDate: colomboKey(2),
-    // A price from the browser is ignored when placing.
+    // A price from the browser is ignored: this cashier may not change prices.
     lines: [{ productId: "broiler", qty: 25, price: 1 }, { productId: "eggs", qty: 60 }],
     deliveryCharge: 500,
     notes: "Cut into 8",
@@ -119,9 +121,14 @@ assert.equal(order.lines[0].price, 1200, "server price, not the browser's");
 assert.equal(order.trackToken.length, 22);
 ok(`placed OR-0001 at server prices; SMS attempt reported as "${placed.sms}"`);
 
-const second = (await placeOrder({ customerId: "kumar", deliveryDate: colomboKey(3), lines: [{ productId: "eggs", qty: 30 }] })).data;
+await adb.doc("settings/cashierPermissions").set({ editBillPrices: true });
+const second = (await placeOrder({ customerId: "kumar", deliveryDate: colomboKey(3), lines: [{ productId: "eggs", qty: 30, price: 45 }, { productId: "broiler", qty: 4.167 }] })).data;
 assert.equal(second.orderNo, 2);
-ok("numbers run on: OR-0002");
+const secondLines = (await adb.doc(`orders/${second.orderId}`).get()).data().lines;
+assert.equal(secondLines[0].price, 45, "typed price kept when the cashier may change prices");
+assert.equal(secondLines[1].price, 1200, "no typed price: list price");
+assert.equal(secondLines[1].qty, 4.167, "weight worked out from an amount, to the gram");
+ok("numbers run on: OR-0002; with price changes allowed the typed price is kept");
 
 // ── Track endpoint ──────────────────────────────────────────────────────
 const track = async (k) => fetch(`${FN_BASE}/trackOrder?k=${encodeURIComponent(k)}`);
@@ -212,16 +219,50 @@ assert.equal(tr.status, "delivered");
 assert.ok(tr.expireAt.toMillis() > Date.now() + 13 * 864e5, "link kept ~14 days");
 ok("delivered: logged, tracking updated, link set to expire in 14 days");
 
-// ── Reopen needs the bill voided first ──────────────────────────────────
+// ── The customer's bill from the track link ─────────────────────────────
+const trackJson = await (await track(order.trackToken)).json();
+assert.equal(trackJson.hasBill, true);
+for (const secret of ["0771234567", orderId, billId]) assert.ok(!JSON.stringify(trackJson).includes(secret), `track leaks ${secret}`);
+const billPdf = async (k) => fetch(`${FN_BASE}/trackOrder?k=${encodeURIComponent(k)}&bill=pdf`);
+r = await billPdf(order.trackToken);
+assert.equal(r.status, 200);
+assert.equal(r.headers.get("content-type"), "application/pdf");
+assert.match(r.headers.get("content-disposition") ?? "", /attachment; filename="VSP_Bill_OR-0001_/);
+const pdfBytes = Buffer.from(await r.arrayBuffer());
+assert.equal(pdfBytes.subarray(0, 5).toString(), "%PDF-");
+assert.ok(pdfBytes.toString("latin1").includes("Kumar Stores"), "PDF names the customer");
+assert.ok(!pdfBytes.toString("latin1").includes("0771234567"), "PDF never shows the mobile");
+// A walk-in saved under their number: that name is never printed on the shareable PDF.
+await adb.doc("customers/kumar").update({ autoNamed: true });
+const anon = Buffer.from(await (await billPdf(order.trackToken)).arrayBuffer()).toString("latin1");
+assert.ok(!anon.includes("Kumar Stores") && anon.includes("Customer"), "auto-named customer printed as Customer");
+await adb.doc("customers/kumar").update({ autoNamed: false });
+assert.equal((await billPdf((await adb.doc(`orders/${second.orderId}`).get()).data().trackToken)).status, 404, "no bill before it goes out");
+ok("track link: hasBill once out, and the bill downloads as a PDF");
+
+// ── Bill deleted on Bills: the order is closed for good ─────────────────
+await rejects(updateOrder({ orderId: second.orderId, action: "delete" }), "permission-denied");
+ok("delete: refused for a cashier");
+const creditBeforeVoid = (await adb.doc("customers/kumar").get()).data().remainingCredit;
+await adb.doc(`bills/${billId}`).update({ status: "void", due: 0 }); // what voidBill writes (balance aside)
+const flagged = await waitFor("bill-void flag", async () => {
+  const o = (await adb.doc(`orders/${orderId}`).get()).data();
+  return o.billVoided === true ? o : null;
+});
+assert.equal(flagged.status, "delivered", "the status stays on record");
+const voidLog = await waitFor("bill-void log", async () => (await adb.doc(`orders/${orderId}/log/billvoid-${billId}`).get()).data());
+assert.equal(voidLog.action, "billVoided");
+const closedTrack = await (await track(order.trackToken)).json();
+assert.equal(closedTrack.hasBill, false);
+assert.equal(closedTrack.status, "cancelled", "the customer's page shows it cancelled");
+assert.equal((await billPdf(order.trackToken)).status, 404);
 await as("admin@vsp.test");
-await rejects(updateOrder({ orderId, action: "reopen" }), "failed-precondition");
-await updateDoc(doc(db, "bills", billId), { status: "void", due: 0 });
-await updateOrder({ orderId, action: "reopen", note: "Wrong weights" });
-order = (await getDoc(doc(db, "orders", orderId))).data();
-assert.equal(order.status, "confirmed");
-assert.equal(order.sendSeq, 2);
-assert.equal(order.billId, null);
-ok("reopen refused while the bill stands; after a void it reopens with sendSeq 2");
+await rejects(updateOrder({ orderId, action: "delete" }), "failed-precondition");
+await rejects(updateOrder({ orderId, action: "cancel" }), "failed-precondition");
+await rejects(updateOrder({ orderId, action: "edit", changes: { notes: "x" } }), "failed-precondition");
+await rejects(updateOrder({ orderId, action: "reopen" }), "invalid-argument");
+assert.equal((await adb.doc("customers/kumar").get()).data().remainingCredit, creditBeforeVoid, "closing touches no balance");
+ok("bill deleted on Bills: order closed (flagged, logged, tracking cancelled); delete, cancel, edit and reopen all refused");
 
 // ── Cancel ──────────────────────────────────────────────────────────────
 await updateOrder({ orderId: second.orderId, action: "cancel", note: "Shop closed" });
@@ -229,6 +270,61 @@ const cancelled = (await getDoc(doc(db, "orders", second.orderId))).data();
 assert.equal(cancelled.status, "cancelled");
 await rejects(updateOrder({ orderId: second.orderId, action: "edit", changes: { deliveryDate: colomboKey(5) } }), "failed-precondition");
 ok("cancelled, and a cancelled order can't be edited");
+
+// ── Delete (admin, before it goes out) ──────────────────────────────────
+const secondToken = cancelled.trackToken;
+await updateOrder({ orderId: second.orderId, action: "delete", note: "Booked twice" });
+assert.equal((await adb.doc(`orders/${second.orderId}`).get()).exists, false);
+assert.equal((await adb.doc(`orderTracking/${secondToken}`).get()).exists, false);
+assert.equal((await adb.collection(`orders/${second.orderId}/log`).get()).size, 0);
+assert.equal((await adb.doc(`orderDeletions/${second.orderId}`).get()).data()?.note, "Booked twice");
+assert.equal((await track(secondToken)).status, 404);
+ok("delete: order, log and track link gone; a record kept in orderDeletions");
+
+// ── Delete an order that went out: its bill goes too, the balance comes back ──
+const third = (await placeOrder({ customerId: "kumar", deliveryDate: colomboKey(1), lines: [{ productId: "broiler", qty: 10 }] })).data;
+const thirdOrder = (await adb.doc(`orders/${third.orderId}`).get()).data();
+const thirdBillId = `${third.orderId}-1`;
+const thirdLines = [{ productId: "broiler", name: "Broiler whole", qty: 10, price: 1200, costPrice: 900, categoryId: "chk" }];
+const thirdTotal = 12000;
+const thirdPaid = 2000;
+const cashAgain = await as("cash1@vsp.test");
+const t3 = Date.now();
+const b3 = writeBatch(db);
+b3.set(doc(db, "bills", thirdBillId), {
+  no: thirdOrder.orderNo, createdAt: Timestamp.fromMillis(t3), syncedAt: serverTimestamp(), cashierId: cashAgain, lines: thirdLines, total: thirdTotal,
+  tender: thirdPaid, change: 0, status: "paid", synced: true, provisionalNo: false, customerId: "kumar", customerName: "Kumar Stores",
+  paymentType: "credit", paid: thirdPaid, due: thirdTotal - thirdPaid, discount: 0, advanceUsed: 0, kind: "order", orderId: third.orderId,
+});
+b3.update(doc(db, "orders", third.orderId), { status: "out", billId: thirdBillId, outAt: t3, outBy: cashAgain, updatedAt: t3, updatedBy: cashAgain });
+b3.set(doc(db, "customers", "kumar"), { remainingCredit: increment(thirdTotal - thirdPaid), updatedAt: t3 }, { merge: true });
+await b3.commit();
+const owedBefore = (await adb.doc("customers/kumar").get()).data().remainingCredit;
+await as("admin@vsp.test");
+const del = (await updateOrder({ orderId: third.orderId, action: "delete", note: "Customer refused" })).data;
+assert.deepEqual(del.balance, { before: owedBefore, after: owedBefore - (thirdTotal - thirdPaid) });
+assert.equal(del.bill.due, thirdTotal - thirdPaid);
+assert.equal((await adb.doc("customers/kumar").get()).data().remainingCredit, owedBefore - (thirdTotal - thirdPaid), "only the unpaid part comes off");
+const deadBill = (await adb.doc(`bills/${thirdBillId}`).get()).data();
+assert.equal(deadBill.status, "void");
+assert.equal(deadBill.due, 0);
+assert.equal(deadBill.paid, thirdPaid, "what was paid stays paid");
+assert.equal((await adb.doc(`orders/${third.orderId}`).get()).exists, false);
+assert.equal((await adb.doc(`orderTracking/${thirdOrder.trackToken}`).get()).exists, false);
+assert.equal((await adb.doc(`orderDeletions/${third.orderId}`).get()).data()?.balance?.after, owedBefore - (thirdTotal - thirdPaid));
+await sleep(1500); // the void trigger fires for the bill; the order is gone, so it must do nothing
+assert.equal((await adb.doc(`orders/${third.orderId}`).get()).exists, false);
+ok(`delete after send-out: bill voided, balance ${owedBefore} → ${del.balance.after}, order and link gone`);
+
+// ── SMS wording: the balance owed ───────────────────────────────────────
+const texts = require("./lib/orders.js");
+const tok = "T".repeat(22);
+assert.match(texts.confirmedText({ name: "Kumar", remainingCredit: 12500 }, 7, colomboKey(2), tok), /\nTotal balance owing: Rs 12,500\n/);
+assert.ok(!texts.confirmedText({ name: "Kumar", remainingCredit: 0 }, 7, colomboKey(2), tok).includes("balance"));
+assert.ok(!texts.confirmedText({ name: "Kumar", remainingCredit: -200 }, 7, colomboKey(2), tok).includes("balance"));
+assert.match(texts.outText(7, 9000, 0, tok, 21500), /Total: Rs 9,000\nTotal balance owing: Rs 21,500\n/);
+assert.ok(!texts.outText(7, 9000, 0, tok, null).includes("balance"));
+ok("order SMS mention the balance owed, only when there is one");
 
 console.log(`\nall ${step} checks passed`);
 process.exit(0);

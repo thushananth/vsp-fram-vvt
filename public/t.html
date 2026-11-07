@@ -5,102 +5,241 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0f1629">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
-<title>Order tracking</title>
+<title>Order tracking · VSP FARM</title>
+<link rel="icon" href="/icon.svg">
 <!--
   The customer's order page, from the link in their SMS. Public: no sign-in,
   no Firebase SDK, nothing from the till's bundle.
     • The token is checked against ^[A-Za-z0-9]{22}$ before any request.
     • Data comes from /api/track (the trackOrder function, same origin), which
       returns only order number, status, day and items. No name, mobile or price.
+      The bill itself (/api/track?bill=pdf) is offered once the order is out.
     • Every value is written with textContent, never innerHTML.
+  Brand colours follow the bill PDF (src/lib/pdf/brand.ts): ink band, amber mark.
 -->
 <style>
   :root{
-    --ink:#0f1629; --ground:#f6f8fb; --surface:#ffffff; --border:#e4e9f1; --muted:#64748b;
+    --ink:#0f1629; --ground:#f4f6fa; --surface:#ffffff; --border:#e4e9f1; --muted:#64748b; --muted-2:#94a3b8;
+    --brand:#d97706; --brand-soft:#fef3c7; --brand-ink:#78350f;
     --accent:#2563eb; --success:#16a34a; --warning:#ea580c; --danger:#dc2626;
+    --band:#0f1629; --band-text:#ffffff; --band-muted:#cbd5e1;
     --s:#2563eb;
+    --shadow:0 1px 2px rgba(15,22,41,.04),0 8px 24px -12px rgba(15,22,41,.12);
   }
   @media (prefers-color-scheme: dark){
-    :root{ --ink:#e6ebf5; --ground:#0a0f1e; --surface:#131c31; --border:#232f4c; --muted:#97a5c0;
-      --accent:#6b9bff; --success:#4ade80; --warning:#fb923c; --danger:#f87171; color-scheme:dark; }
+    :root{ --ink:#e6ebf5; --ground:#0a0f1e; --surface:#131c31; --border:#232f4c; --muted:#97a5c0; --muted-2:#6b7a96;
+      --brand:#f59e0b; --brand-soft:#3a2a0c; --brand-ink:#fcd34d;
+      --accent:#6b9bff; --success:#4ade80; --warning:#fb923c; --danger:#f87171;
+      --band:#060a15; --shadow:none; color-scheme:dark; }
   }
   *{box-sizing:border-box}
   html,body{margin:0}
   body{
     font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans Tamil","Noto Sans Sinhala",sans-serif;
-    background:var(--ground); color:var(--ink); line-height:1.5;
-    padding:max(20px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));
+    background:var(--ground); color:var(--ink); line-height:1.5; -webkit-font-smoothing:antialiased;
+    min-height:100vh; min-height:100dvh; display:flex; flex-direction:column;
   }
-  main{max-width:440px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
-  .card{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:20px}
-  .shop{font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-  .no{font-size:30px;font-weight:800;letter-spacing:-.01em;font-variant-numeric:tabular-nums;margin-top:4px}
-  .day{color:var(--muted);font-weight:600;margin-top:2px}
-  .badge{display:inline-block;margin-top:12px;padding:4px 12px;border-radius:999px;font-size:13px;font-weight:800;
-    color:var(--s);background:color-mix(in srgb,var(--s) 12%,transparent)}
+  .wrap{width:100%;max-width:520px;margin:0 auto;padding:0 16px}
+
+  /* ── Shop band ── */
+  header{background:var(--band);color:var(--band-text);border-bottom:3px solid var(--brand);
+    padding-top:env(safe-area-inset-top)}
+  header .wrap{display:flex;align-items:center;gap:12px;padding-top:16px;padding-bottom:16px}
+  .mark{flex:none;width:44px;height:44px;border-radius:12px;background:var(--brand);color:#fff;
+    display:grid;place-items:center;font-weight:900;font-size:14px;letter-spacing:.02em}
+  .brand{min-width:0;flex:1}
+  .brand b{display:block;font-size:18px;font-weight:800;letter-spacing:.02em;line-height:1.2}
+  .brand span{display:block;font-size:12px;color:var(--band-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tag{flex:none;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--brand-soft);
+    border:1px solid rgba(254,243,199,.35);border-radius:999px;padding:4px 10px}
+  @media (max-width:360px){.tag{display:none}}
+
+  main{flex:1;padding:16px 0 8px}
+  main .wrap{display:flex;flex-direction:column;gap:12px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:18px;box-shadow:var(--shadow)}
+  h2{font-size:12px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+
+  /* ── Order hero ── */
+  .hero{position:relative;overflow:hidden;padding:20px 18px}
+  .hero::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:var(--s)}
+  .label{font-size:12px;font-weight:700;color:var(--muted)}
+  .no{font-size:32px;font-weight:900;letter-spacing:-.01em;font-variant-numeric:tabular-nums;line-height:1.15;margin-top:2px}
+  .badge{display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:6px 12px;border-radius:999px;font-size:14px;font-weight:800;
+    color:var(--s);background:color-mix(in srgb,var(--s) 13%,transparent)}
+  .badge::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+  .facts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;padding-top:14px;border-top:1px dashed var(--border)}
+  .facts dt{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-2)}
+  .facts dd{margin:2px 0 0;font-weight:700;font-size:15px}
+
+  /* ── Download ── */
+  .bill{display:flex;align-items:center;gap:14px}
+  .bill .ic{flex:none;width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:var(--brand-soft);color:var(--brand-ink)}
+  .bill .tx{flex:1;min-width:0}
+  .bill .tx b{display:block;font-size:15px}
+  .bill .tx span{display:block;font-size:13px;color:var(--muted)}
+  .btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:52px;margin-top:14px;border-radius:14px;
+    background:var(--brand);color:#fff;font-weight:800;font-size:16px;text-decoration:none;border:0}
+  .btn:active{transform:translateY(1px)}
+  .btn:focus-visible{outline:3px solid color-mix(in srgb,var(--brand) 45%,transparent);outline-offset:2px}
+
+  /* ── Progress ── */
   ol{list-style:none;margin:0;padding:0}
-  .steps li{display:grid;grid-template-columns:24px 1fr;gap:12px;position:relative;padding-bottom:18px}
+  .steps li{display:grid;grid-template-columns:28px 1fr;gap:12px;position:relative;padding-bottom:20px}
   .steps li:last-child{padding-bottom:0}
-  .steps li::before{content:"";width:16px;height:16px;border-radius:50%;border:2px solid var(--border);background:var(--surface);margin-top:3px;z-index:1}
-  .steps li::after{content:"";position:absolute;left:7px;top:22px;bottom:0;width:2px;background:var(--border)}
+  .steps .dot{width:28px;height:28px;border-radius:50%;border:2px solid var(--border);background:var(--surface);z-index:1;
+    display:grid;place-items:center;color:#fff}
+  .steps li::after{content:"";position:absolute;left:13px;top:30px;bottom:2px;width:2px;background:var(--border)}
   .steps li:last-child::after{display:none}
-  .steps li.done::before{background:var(--success);border-color:var(--success)}
+  .steps li.done .dot{background:var(--success);border-color:var(--success)}
   .steps li.done::after{background:var(--success)}
-  .steps li.now::before{background:var(--s);border-color:var(--s);box-shadow:0 0 0 4px color-mix(in srgb,var(--s) 20%,transparent)}
-  .steps .t{font-weight:700}
-  .steps .w{font-size:13px;color:var(--muted)}
-  h2{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
-  .items li{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--border)}
-  .items li:first-child{border-top:0}
+  .steps li.now .dot{background:var(--s);border-color:var(--s);box-shadow:0 0 0 5px color-mix(in srgb,var(--s) 18%,transparent)}
+  .steps li.todo .t{color:var(--muted)}
+  .steps .t{font-weight:800;padding-top:3px}
+  .steps .w{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+  /* ── Items ── */
+  .items li{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:11px 0;border-top:1px solid var(--border)}
+  .items li:first-child{border-top:0;padding-top:2px}
+  .items .n{font-weight:600;min-width:0;overflow-wrap:anywhere}
   .items .q{font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
   .note{font-size:13px;color:var(--muted)}
-  .contact a{color:var(--accent);font-weight:700;text-decoration:none;font-variant-numeric:tabular-nums}
-  .contact{font-size:14px;display:flex;flex-wrap:wrap;gap:4px 14px}
+
+  /* ── Contact ── */
+  .contact{display:flex;flex-direction:column;gap:8px}
+  .call{display:flex;align-items:center;gap:12px;min-height:48px;padding:8px 12px;border:1px solid var(--border);border-radius:14px;
+    color:var(--ink);text-decoration:none;font-weight:800;font-variant-numeric:tabular-nums}
+  .call .ic{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:color-mix(in srgb,var(--success) 14%,transparent);color:var(--success)}
+  .call small{margin-left:auto;font-weight:700;color:var(--accent)}
+
+  /* ── Confidential ── */
+  .secure{border-color:color-mix(in srgb,var(--warning) 35%,var(--border));background:color-mix(in srgb,var(--warning) 6%,var(--surface))}
+  .secure .hd{display:flex;align-items:center;gap:8px;font-weight:800;color:var(--warning);margin-bottom:6px}
+  .secure p{margin:0;font-size:13.5px;color:var(--ink)}
+  .secure ul{margin:8px 0 0;padding-left:18px;font-size:13.5px}
+  .secure li{margin:3px 0}
+
+  footer{padding:18px 16px max(22px,env(safe-area-inset-bottom));text-align:center;font-size:12px;color:var(--muted)}
+  footer b{color:var(--brand);font-weight:800;letter-spacing:.04em}
+  footer .shop{display:block;margin-bottom:4px;color:var(--muted-2)}
+
+  .state{text-align:center;padding:28px 18px}
+  .state .ic{width:56px;height:56px;margin:0 auto 12px;border-radius:16px;display:grid;place-items:center;background:var(--ground);color:var(--muted)}
+  .state b{display:block;font-size:18px;margin-bottom:4px}
+  .state p{margin:0}
+
   .sk{display:block;border-radius:8px;background:var(--border);animation:p 1.2s ease-in-out infinite}
   @keyframes p{50%{opacity:.5}}
-  @media (prefers-reduced-motion:reduce){.sk{animation:none}}
+  @media (prefers-reduced-motion:reduce){.sk{animation:none}.btn:active{transform:none}}
   [hidden]{display:none!important}
+
+  @media (min-width:700px){
+    main{padding-top:28px}
+    .no{font-size:36px}
+  }
 </style>
 </head>
 <body>
+<header>
+  <div class="wrap">
+    <div class="mark" aria-hidden="true">VSP</div>
+    <div class="brand">
+      <b id="shop">VSP FARM</b>
+      <span>Theniyambai, Valvettithurai</span>
+    </div>
+    <span class="tag">Order tracking</span>
+  </div>
+</header>
+
 <main>
-  <section class="card" id="loading" aria-busy="true" aria-label="Loading your order">
-    <span class="sk" style="width:30%;height:12px"></span>
-    <span class="sk" style="width:55%;height:30px;margin-top:10px"></span>
-    <span class="sk" style="width:40%;height:14px;margin-top:10px"></span>
-  </section>
-
-  <section class="card" id="missing" hidden>
-    <div class="shop">Order tracking</div>
-    <p style="font-weight:700;font-size:18px;margin:8px 0 4px">This link has expired or isn't valid.</p>
-    <p class="note" style="margin:0">Tracking links stop working two weeks after delivery. Please call us if you need help.</p>
-  </section>
-
-  <section class="card" id="offline" hidden>
-    <p style="font-weight:700;margin:0 0 4px">Couldn't load your order.</p>
-    <p class="note" style="margin:0">Check your connection and open the link again.</p>
-  </section>
-
-  <div id="order" hidden style="display:contents">
-    <section class="card">
-      <div class="shop" id="shop"></div>
-      <div class="no" id="no"></div>
-      <div class="day" id="day"></div>
-      <span class="badge" id="badge"></span>
+  <div class="wrap">
+    <section class="card" id="loading" aria-busy="true" aria-label="Loading your order">
+      <span class="sk" style="width:30%;height:12px"></span>
+      <span class="sk" style="width:55%;height:32px;margin-top:10px"></span>
+      <span class="sk" style="width:38%;height:26px;margin-top:12px;border-radius:999px"></span>
+      <span class="sk" style="width:100%;height:44px;margin-top:18px"></span>
     </section>
-    <section class="card">
-      <h2>Progress</h2>
-      <ol class="steps" id="steps"></ol>
+
+    <section class="card state" id="missing" hidden>
+      <div class="ic" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/><path d="m2 2 20 20"/></svg>
+      </div>
+      <b>This link has expired or isn't valid.</b>
+      <p class="note">Tracking links stop working two weeks after delivery. Please call us if you need help.</p>
     </section>
-    <section class="card">
-      <h2>Your order</h2>
-      <ol class="items" id="items"></ol>
-      <p class="note" id="weighed" style="margin:10px 0 0">Weights are approximate until it's weighed on the day.</p>
+
+    <section class="card state" id="offline" hidden>
+      <div class="ic" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h.01"/><path d="M8.5 16.4a5 5 0 0 1 7 0"/><path d="M5 12.9a10 10 0 0 1 5.2-2.8"/><path d="M19 12.9a10 10 0 0 0-2.2-1.6"/><path d="M2 8.8a15 15 0 0 1 4.2-2.6"/><path d="M22 8.8A15 15 0 0 0 10.7 5"/><path d="m2 2 20 20"/></svg>
+      </div>
+      <b>Couldn't load your order.</b>
+      <p class="note">Check your connection and open the link again.</p>
     </section>
-    <section class="card contact" id="contact"></section>
+
+    <div id="order" hidden style="display:contents">
+      <section class="card hero">
+        <div class="label">Your order</div>
+        <div class="no" id="no"></div>
+        <span class="badge" id="badge"></span>
+        <dl class="facts">
+          <div><dt id="dayLabel">Delivery</dt><dd id="day"></dd></div>
+          <div><dt>Items</dt><dd id="count"></dd></div>
+        </dl>
+      </section>
+
+      <section class="card" id="billCard" hidden>
+        <div class="bill">
+          <div class="ic" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 17.5v-11"/></svg>
+          </div>
+          <div class="tx">
+            <b>Your bill is ready</b>
+            <span id="billSub">Download a PDF copy for your records.</span>
+          </div>
+        </div>
+        <a class="btn" id="billLink" href="#" download rel="noopener">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3"/><path d="m7 10 5 5 5-5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></svg>
+          Download bill (PDF)
+        </a>
+      </section>
+
+      <section class="card">
+        <h2>Progress</h2>
+        <ol class="steps" id="steps"></ol>
+      </section>
+
+      <section class="card">
+        <h2>What you ordered</h2>
+        <ol class="items" id="items"></ol>
+        <p class="note" id="weighed" style="margin:12px 0 0">Weights are approximate until your order is weighed on the day.</p>
+      </section>
+
+      <section class="card">
+        <h2>Need help?</h2>
+        <div class="contact" id="contact"></div>
+      </section>
+    </div>
+
+    <section class="card secure" aria-labelledby="secure-hd">
+      <div class="hd" id="secure-hd">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Confidential
+      </div>
+      <p>This link is private to you and your business.</p>
+      <ul>
+        <li>Don't share it with anyone outside your organisation.</li>
+        <li>Anyone who has the link can see your order and download your bill, so sharing it may expose your details.</li>
+        <li>If you think someone else has seen it, or anything looks wrong, please contact us straight away.</li>
+      </ul>
+    </section>
   </div>
 </main>
+
+<footer>
+  <span class="shop">VSP FARM · Theniyambai, Valvettithurai, Sri Lanka</span>
+  Powered by <b>5XCODES</b>
+</footer>
 <script src="/t.js"></script>
 </body>
 </html>

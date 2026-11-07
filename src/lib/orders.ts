@@ -30,6 +30,25 @@ export function billMatches(bill: { no: number; kind?: "order" }, needle: string
   return digits !== n && digits !== "" && String(bill.no) === String(Number(digits));
 }
 
+/**
+ * Does a typed search name this order? Its number ("43", "OR-0043"), the
+ * customer (as stored or as shown), a product on it, or its note.
+ */
+export function orderMatches(
+  order: Pick<Order, "orderNo" | "customerName" | "lines" | "notes">,
+  needle: string,
+  shownName?: string,
+): boolean {
+  const n = needle.trim().toLowerCase();
+  if (!n) return true;
+  if (billMatches({ no: order.orderNo, kind: "order" }, n)) return true;
+  if (orderLabel(order.orderNo).toLowerCase().includes(n)) return true;
+  if (order.customerName.toLowerCase().includes(n)) return true;
+  if (shownName && shownName.toLowerCase().includes(n)) return true;
+  if (order.notes && order.notes.toLowerCase().includes(n)) return true;
+  return order.lines.some((l) => l.name.toLowerCase().includes(n));
+}
+
 /** The id the OR- bill gets each time the order goes out — fixed, so a double tap writes the same bill. */
 export function nextBillId(order: Pick<Order, "id" | "sendSeq">): string {
   return `${order.id}-${order.sendSeq}`;
@@ -38,6 +57,18 @@ export function nextBillId(order: Pick<Order, "id" | "sendSeq">): string {
 /** The pseudo product the delivery charge is billed as. */
 export const DELIVERY_PRODUCT_ID = "delivery";
 export const DELIVERY_LINE_NAME = "Delivery charge";
+
+/** What the Order reports screen (and its PDF) shows for the picked range and filters. */
+export interface OrderReport {
+  label: string;
+  orders: Order[];
+  counts: Record<OrderStatus, number>;
+  billDeleted: number;
+  value: number;
+  deliveryCharges: number;
+  byProduct: { name: string; unit: string; qty: number; value: number; orders: number }[];
+  byCustomer: { name: string; orders: number; value: number }[];
+}
 
 // ── Dates: "yyyy-mm-dd" calendar days, the till's own (Sri Lanka) time ──
 
@@ -112,7 +143,18 @@ export function estimatedTotal(order: Pick<Order, "lines" | "deliveryCharge">): 
   return Math.round((goods + (order.deliveryCharge ?? 0)) * 100) / 100;
 }
 
-/** An OR- bill whose order has since been reopened shows the bill as void, never as the order's. */
+/** Its OR- bill was deleted on Bills: the order is closed for good and nothing can be done with it. */
+export function isClosed(order: Pick<Order, "billVoided">): boolean {
+  return order.billVoided;
+}
+
+/** The pill an order wears: its status, or "Closed" once its bill was deleted. */
+export function orderPill(order: Pick<Order, "status" | "billVoided">): { label: string; pill: string; dot: string } {
+  if (order.billVoided) return { label: "Closed · bill deleted", pill: "bg-danger/10 text-danger", dot: "bg-danger" };
+  return { label: ORDER_STATUS_LABEL[order.status], ...ORDER_STATUS_TONE[order.status] };
+}
+
+/** A deleted OR- bill shows as void, never as the order's. */
 export function isOrderBill(b: Pick<Bill, "kind">): boolean {
   return b.kind === "order";
 }

@@ -51,6 +51,16 @@ a **tablet held in portrait**; admins also use a laptop. Money is shown as `Rs 1
   Settings → Orders. Every order SMS has its own switch; defaults live in both `settings.ts` and `orders.ts`.
 - The customer's track page is `public/t.html` + `t.js` (no app bundle, no login), reading `/api/track`
   (the `trackOrder` function, Hosting rewrite). Firestore stays closed to the public.
+  Once the order is out, `/api/track?k=…&bill=pdf` serves the OR- bill as a PDF made server-side by
+  `functions/src/billPdf.ts` (a port of `src/lib/pdf/billPdf.ts`: keep the two in step). No mobile on it.
+- Admins can delete an order (`updateOrder` action `delete`): order, log and track link go, a record stays
+  in `orderDeletions/{id}`. Once it went out, its OR- bill is voided in the same transaction exactly like
+  `voidBill` (unpaid part off the balance, advance back, paid stays paid); the sheet previews the balance
+  before → after. There is no reopen.
+- `onOrderBillVoided` closes the order for good when its OR- bill is deleted on Bills (`billVoided`, shown
+  as "Closed · bill deleted", listed under Done): the server, the rules (no delivered) and the UI refuse
+  every action on it, and the track page shows it cancelled.
+- `/orders/calendar` and `/orders/report` (order reports by delivery day, PDF) hang off the Orders header.
 - `npm run test:orders` runs the whole flow on the emulators. It refuses to start if
   `functions/.secret.local` exists, since the emulator would then send real SMS.
 
@@ -113,6 +123,7 @@ npm run lint
 npx tsc --noEmit
 npm run test:rules   # Firestore + Storage rules on the emulator
 npm run test:orders  # advance orders end to end (auth, firestore, functions emulators)
+npm run test:assistant  # admin Ask assistant: tools, cash check, masking, loop (no Gemini calls)
 ```
 
 `npm run lint` has a few older `react-hooks/set-state-in-effect` errors (AppShell, auth, online,

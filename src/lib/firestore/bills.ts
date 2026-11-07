@@ -394,6 +394,18 @@ export function useBills(range?: MsRange): { bills: Bill[]; loading: boolean } {
   return { bills: data ?? NO_BILLS, loading };
 }
 
+/** One bill, live — e.g. an order's OR- bill before deleting it. */
+export function useBill(billId: string | null): { bill: Bill | null; loading: boolean } {
+  const { data, loading } = useLive<Bill | null>(billId ? `bills:doc:${billId}` : null, (emit, fail) =>
+    onSnapshot(
+      doc(db, "bills", billId!),
+      (snap) => emit(snap.exists() ? toBill(snap.id, snap.data(), snap.metadata.hasPendingWrites) : null),
+      fail,
+    ),
+  );
+  return { bill: data ?? null, loading };
+}
+
 /** Every bill for one customer, newest first — their statement. */
 export function useCustomerBills(customerId: string | null): {
   bills: Bill[];

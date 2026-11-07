@@ -237,7 +237,9 @@ service cloud.firestore {
 
     function delivers() {
       let d = request.resource.data;
+      // An order whose OR- bill was deleted on Bills is closed for good.
       return resource.data.status == 'out' && d.status == 'delivered' &&
+        resource.data.get('billVoided', false) != true &&
         changed().hasOnly(['status', 'deliveredAt', 'deliveredBy', 'updatedAt', 'updatedBy']) &&
         d.deliveredBy == request.auth.uid && d.updatedBy == request.auth.uid &&
         isNum(d.deliveredAt);

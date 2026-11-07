@@ -328,6 +328,15 @@ describe("advance orders", () => {
       status: "out", outAt: now, outBy: "cash1", updatedAt: now, updatedBy: "cash1",
     }));
   });
+  test("an order closed by its bill's deletion can't be marked delivered", async () => {
+    await assertSucceeds(sendOutBatch(as("cash1"), "cash1"));
+    await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), "orders/o1"), { billVoided: true, billVoidedAt: 1 }));
+    const now = Date.now();
+    await assertFails(updateDoc(doc(as("cash1"), "orders/o1"), {
+      status: "delivered", deliveredAt: now, deliveredBy: "cash1", updatedAt: now, updatedBy: "cash1",
+    }));
+    await assertFails(updateDoc(doc(as("admin"), "orders/o1"), { billVoided: false }));
+  });
   test("can't jump straight from confirmed to delivered", async () => {
     const now = Date.now();
     await assertFails(updateDoc(doc(as("cash1"), "orders/o1"), {

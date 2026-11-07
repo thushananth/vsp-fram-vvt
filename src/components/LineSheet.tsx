@@ -33,7 +33,17 @@ export default function LineSheet({
   onApply,
   onRemove,
   onClose,
+  layer = "z-30",
+  removeLabel = "Remove from bill",
+  priceLockedNote = "Price changes on the bill are off for cashiers — an admin can allow them in Settings.",
+  scope = "this bill only",
 }: {
+  /** Shown after an overridden price: "Normal price Rs 1,230 — this bill only." */
+  scope?: string;
+  /** Tailwind z-index class; raise it when opened over another sheet (an order form). */
+  layer?: string;
+  removeLabel?: string;
+  priceLockedNote?: string;
   line: BillLine;
   unit: string;
   imageUrl: string | null;
@@ -162,7 +172,7 @@ export default function LineSheet({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-end justify-center bg-ink/50 md:items-center md:p-6"
+      className={`fixed inset-0 ${layer} flex items-end justify-center bg-ink/50 md:items-center md:p-6`}
       onClick={onClose}
     >
       <div
@@ -228,12 +238,12 @@ export default function LineSheet({
             </button>
             {!canEditPrice && (
               <p className="-mt-1 px-1 text-[11px] font-medium text-muted-2">
-                Price changes on the bill are off for cashiers — an admin can allow them in Settings.
+                {priceLockedNote}
               </p>
             )}
             {canEditPrice && line.listPrice !== undefined && priceValue !== line.listPrice && (
               <p className="-mt-1 px-1 text-[11px] font-bold text-warning">
-                Normal price {money(line.listPrice)} — this bill only.
+                Normal price {money(line.listPrice)} — {scope}.
               </p>
             )}
 
@@ -283,7 +293,7 @@ export default function LineSheet({
           <div className="flex gap-2 md:hidden">
             <button
               onClick={onRemove}
-              aria-label="Remove from bill"
+              aria-label={removeLabel}
               className="flex min-h-[56px] w-16 items-center justify-center rounded-2xl border border-danger/40 text-danger"
             >
               <Trash2 className="h-5 w-5" />

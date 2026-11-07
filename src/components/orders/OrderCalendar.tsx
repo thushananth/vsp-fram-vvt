@@ -14,6 +14,7 @@ import {
   longDate,
   monthBounds,
   orderLabel,
+  orderPill,
 } from "@/lib/orders";
 import NavPending from "@/components/NavPending";
 import type { Order } from "@/lib/types";
@@ -25,7 +26,15 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
  * per order in its status colour, and the day's list under the grid. Reads one
  * month of orders and nothing else.
  */
-export default function OrderCalendar() {
+export default function OrderCalendar({
+  standalone = false,
+  onOpen,
+}: {
+  /** On its own page (/orders/calendar): no "Open Orders" header, bigger grid. */
+  standalone?: boolean;
+  /** Tap an order in the day's list. */
+  onOpen?: (order: Order) => void;
+} = {}) {
   const today = localDateKey();
   const [month, setMonth] = useState(() => today.slice(0, 7));
   const [picked, setPicked] = useState(today);
@@ -69,8 +78,8 @@ export default function OrderCalendar() {
   const monthCount = orders.filter((o) => o.status !== "cancelled").length;
 
   return (
-    <section className="mt-6" aria-labelledby="order-calendar-title">
-      <div className="mb-2.5 flex items-end justify-between gap-3">
+    <section className={standalone ? "" : "mt-6"} aria-labelledby="order-calendar-title">
+      <div className={`mb-2.5 flex items-end justify-between gap-3 ${standalone ? "sr-only" : ""}`}>
         <div>
           <h2 id="order-calendar-title" className="text-[17px] font-bold">
             Orders
@@ -81,10 +90,12 @@ export default function OrderCalendar() {
               : "Nothing booked for tomorrow"}
           </p>
         </div>
-        <Link href="/orders" className="relative min-h-[44px] rounded-xl border border-border px-3.5 py-2.5 text-sm font-bold">
-          Open Orders
-          <NavPending tone="light" />
-        </Link>
+        {!standalone && (
+          <Link href="/orders" className="relative min-h-[44px] rounded-xl border border-border px-3.5 py-2.5 text-sm font-bold">
+            Open Orders
+            <NavPending tone="light" />
+          </Link>
+        )}
       </div>
 
       <div className="rounded-2xl border border-border bg-surface p-3 sm:p-4">
@@ -164,7 +175,7 @@ export default function OrderCalendar() {
                       {list.slice(0, 5).map((o) => (
                         <span
                           key={o.id}
-                          className={`h-1.5 w-1.5 rounded-full ${isPicked ? "bg-white" : ORDER_STATUS_TONE[o.status].dot}`}
+                          className={`h-1.5 w-1.5 rounded-full ${isPicked ? "bg-white" : orderPill(o).dot}`}
                         />
                       ))}
                     </span>
@@ -190,13 +201,24 @@ export default function OrderCalendar() {
             </p>
           ) : (
             dayOrders.map((o) => (
-              <div key={o.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 rounded-xl border border-border px-3 py-2.5">
+              <div
+                key={o.id}
+                role={onOpen ? "button" : undefined}
+                tabIndex={onOpen ? 0 : undefined}
+                onClick={onOpen ? () => onOpen(o) : undefined}
+                onKeyDown={onOpen ? (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onOpen(o)) : undefined}
+                className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-0.5 rounded-xl border border-border px-3 py-2.5 ${
+                  onOpen ? "cursor-pointer active:bg-ground" : ""
+                }`}
+              >
                 <span className="tabular-nums text-xs font-bold text-muted">{orderLabel(o.orderNo)}</span>
                 <span className="truncate font-bold">{label(o.customerName)}</span>
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${ORDER_STATUS_TONE[o.status].pill}`}>
-                  {ORDER_STATUS_LABEL[o.status]}
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${orderPill(o).pill}`}>
+                  {orderPill(o).label}
                 </span>
-                <span className="col-span-2 col-start-2 truncate text-xs font-medium text-muted">{linesSummary(o.lines)}</span>
+                <span className="col-span-2 col-start-2 truncate text-xs font-medium text-muted">
+                  {linesSummary(o.lines)}
+                </span>
               </div>
             ))
           )}

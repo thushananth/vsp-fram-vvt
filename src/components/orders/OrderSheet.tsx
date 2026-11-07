@@ -1,20 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, X } from "lucide-react";
+import { Copy, Trash2, X } from "lucide-react";
 import { markDelivered, updateOrder, useOrderLog } from "@/lib/firestore/orders";
+import { useBill } from "@/lib/firestore/bills";
+import { useCustomer } from "@/lib/firestore/customers";
 import { useAuth } from "@/lib/auth";
 import { useCustomerLabel } from "@/lib/customerName";
 import { useOnline } from "@/lib/online";
 import { dateAndTime, money } from "@/lib/format";
-import {
-  ORDER_STATUS_LABEL,
-  ORDER_STATUS_TONE,
-  estimatedTotal,
-  longDate,
-  orderLabel,
-  qtyText,
-} from "@/lib/orders";
+import { estimatedTotal, isClosed, longDate, orderLabel, orderPill, qtyText } from "@/lib/orders";
 import type { Order, OrderLogEntry } from "@/lib/types";
 
 const ACTION_LABEL: Record<OrderLogEntry["action"], string> = {
@@ -25,6 +20,7 @@ const ACTION_LABEL: Record<OrderLogEntry["action"], string> = {
   reopened: "Reopened",
   out: "Sent out",
   delivered: "Delivered",
+  billVoided: "Bill deleted",
 };
 
 const FIELD_LABEL: Record<string, string> = {
@@ -33,6 +29,7 @@ const FIELD_LABEL: Record<string, string> = {
   deliveryCharge: "Delivery charge",
   notes: "Notes",
   status: "Status",
+  bill: "Bill",
 };
 
 function fieldLabel(field: string): string {
@@ -48,9 +45,12 @@ export default function OrderSheet({
   onSendOut,
   onEdit,
   onNotice,
+  readOnly = false,
 }: {
   order: Order;
   canManage: boolean;
+  /** From a report: details and log only, no buttons. Actions live on Orders. */
+  readOnly?: boolean;
   onClose: () => void;
   onSendOut: () => void;
   onEdit: () => void;
@@ -61,11 +61,14 @@ export default function OrderSheet({
   const { label } = useCustomerLabel();
   const online = useOnline();
   const { log, loading: logLoading } = useOrderLog(order.id, isAdmin);
-  const [confirming, setConfirming] = useState<"cancel" | "reopen" | null>(null);
+  const [confirming, setConfirming] = useState<"cancel" | "delete" | null>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const tone = ORDER_STATUS_TONE[order.status];
+  const pill = orderPill(order);
+  const closed = isClosed(order);
+  // Once out, deleting the order deletes its bill too.
+  const withBill = !!order.billId && (order.status === "out" || order.status === "delivered");
   const trackUrl = typeof window !== "undefined" && order.trackToken ? `${window.location.origin}/t?k=${order.trackToken}` : "";
 
   async function deliver() {
@@ -77,11 +80,17 @@ export default function OrderSheet({
     onClose();
   }
 
-  async function adminAction(action: "cancel" | "reopen") {
+  async function adminAction(action: "cancel" | "delete") {
     setBusy(true);
     try {
-      await updateOrder({ orderId: order.id, action, note: reason.trim() || null });
-      onNotice(action === "cancel" ? `${orderLabel(order.orderNo)} cancelled` : `${orderLabel(order.orderNo)} reopened. Send it out again when ready.`);
+      const { data } = await updateOrder({ orderId: order.id, action, note: reason.trim() || null });
+      const no = orderLabel(order.orderNo);
+      if (action === "cancel") onNotice(`${no} cancelled`);
+      else if (data.balance) {
+        onNotice(
+          `${no} and its bill deleted. ${label(order.customerName)} now owes ${money(data.balance.after)} (was ${money(data.balance.before)}).`,
+        );
+      } else onNotice(data.bill ? `${no} and its bill deleted. ${label(order.customerName)}'s balance didn't change.` : `${no} deleted`);
       onClose();
     } catch (err) {
       onNotice((err as Error).message, true);
@@ -111,7 +120,7 @@ export default function OrderSheet({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="tabular-nums text-xl font-extrabold">{orderLabel(order.orderNo)}</span>
-              <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${tone.pill}`}>{ORDER_STATUS_LABEL[order.status]}</span>
+              <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${pill.pill}`}>{pill.label}</span>
             </div>
             <div className="truncate text-base font-bold">{label(order.customerName)}</div>
             <div className="text-sm font-medium text-muted">{longDate(order.deliveryDate)}</div>
@@ -127,6 +136,13 @@ export default function OrderSheet({
         </div>
 
         <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
+          {closed && (
+            <p className="rounded-xl border border-danger/30 bg-danger/5 px-3.5 py-2.5 text-sm font-semibold text-danger">
+              Closed. Its bill {orderLabel(order.orderNo)} was deleted on Bills
+              {order.billVoidedAt ? ` (${dateAndTime(order.billVoidedAt)})` : ""}, so nothing more can be done with this
+              order. Book a new order if the customer still wants it.
+            </p>
+          )}
           <ul className="flex flex-col divide-y divide-border rounded-2xl border border-border">
             {order.lines.map((l, i) => (
               <li key={i} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
@@ -184,7 +200,7 @@ export default function OrderSheet({
             )}
           </dl>
 
-          {trackUrl && order.status !== "cancelled" && (
+          {trackUrl && order.status !== "cancelled" && !closed && (
             <div className="flex items-center gap-2 rounded-xl border border-border px-3.5 py-2">
               <div className="min-w-0 flex-1">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-muted-2">Customer&apos;s track link</div>
@@ -238,13 +254,20 @@ export default function OrderSheet({
           )}
         </div>
 
-        {confirming ? (
-          <div className="flex flex-col gap-2 border-t border-border px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
+        {readOnly ? null : closed ? (
+          <p className="border-t border-border px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 text-sm font-semibold text-muted">
+            Closed: no actions.
+          </p>
+        ) : confirming ? (
+          <div className="flex max-h-[70dvh] flex-col gap-2 overflow-y-auto border-t border-border px-5 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
             <p className="text-sm font-bold">
               {confirming === "cancel"
                 ? `Cancel ${orderLabel(order.orderNo)}? The customer is texted if that SMS is on.`
-                : "Reopen this order? Its bill must already be deleted (voided) on Bills. The order goes back to Confirmed."}
+                : withBill
+                  ? `Delete ${orderLabel(order.orderNo)} and its bill for good?`
+                  : `Delete ${orderLabel(order.orderNo)} for good? It disappears from Orders and its track link stops working. The customer is not texted (cancel it instead if they should be).`}
             </p>
+            {confirming === "delete" && withBill && <DeletePreview order={order} customerName={label(order.customerName)} />}
             <input
               id="order-reason"
               value={reason}
@@ -265,11 +288,9 @@ export default function OrderSheet({
                 type="button"
                 disabled={busy || !online}
                 onClick={() => adminAction(confirming)}
-                className={`min-h-[52px] flex-[2] rounded-2xl font-bold text-white disabled:opacity-40 ${
-                  confirming === "cancel" ? "bg-danger" : "bg-accent"
-                }`}
+                className="min-h-[52px] flex-[2] rounded-2xl bg-danger font-bold text-white disabled:opacity-40"
               >
-                {busy ? "Saving…" : confirming === "cancel" ? "Cancel order" : "Reopen order"}
+                {busy ? "Saving…" : confirming === "cancel" ? "Cancel order" : withBill ? "Delete order and bill" : "Delete order"}
               </button>
             </div>
           </div>
@@ -295,14 +316,16 @@ export default function OrderSheet({
                 </button>
               </>
             )}
-            {isAdmin && (order.status === "out" || order.status === "delivered") && (
+            {isAdmin && (
               <button
                 type="button"
                 disabled={!online}
-                onClick={() => setConfirming("reopen")}
-                className="min-h-[52px] flex-1 rounded-2xl border border-border px-4 font-bold disabled:opacity-40"
+                onClick={() => setConfirming("delete")}
+                aria-label="Delete order"
+                className="flex min-h-[52px] items-center justify-center gap-1.5 rounded-2xl border border-danger/40 px-4 font-bold text-danger disabled:opacity-40"
               >
-                Reopen
+                <Trash2 className="h-4 w-4" />
+                Delete
               </button>
             )}
             {canManage && order.status === "confirmed" && (
@@ -325,10 +348,65 @@ export default function OrderSheet({
             )}
           </div>
         )}
-        {!online && confirming === null && isAdmin && (
-          <p className="px-5 pb-3 text-xs font-semibold text-warning">Changing, cancelling or reopening needs the internet.</p>
+        {!readOnly && !online && confirming === null && isAdmin && (
+          <p className="px-5 pb-3 text-xs font-semibold text-warning">Changing, cancelling or deleting needs the internet.</p>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * What deleting an order that went out will do: its bill is deleted (voided)
+ * the way Delete on Bills does it, and the customer's balance drops by what
+ * was still unpaid on it. Read live, so the numbers are today's.
+ */
+function DeletePreview({ order, customerName }: { order: Order; customerName: string }) {
+  const { bill, loading } = useBill(order.billId);
+  const customer = useCustomer(order.customerId);
+  if (loading && !bill) {
+    return (
+      <div className="skeleton-in flex flex-col gap-1.5" aria-label="Loading the bill">
+        <span className="skeleton block h-24 rounded-xl" />
+      </div>
+    );
+  }
+  if (!bill) return <p className="text-sm font-semibold text-danger">Its bill can&apos;t be found. Deleting will be refused.</p>;
+  const owed = customer?.remainingCredit ?? 0;
+  const live = bill.status !== "void";
+  const after = live ? Math.max(0, owed - bill.due) : owed;
+  const row = (k: string, v: string, strong = false) => (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-muted">{k}</dt>
+      <dd className={`tabular-nums ${strong ? "font-extrabold" : "font-semibold"}`}>{v}</dd>
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <dl className="flex flex-col gap-1 rounded-xl border border-border px-3.5 py-2.5">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-muted-2">Bill {orderLabel(order.orderNo)} · deleted too</div>
+        {row("Bill total", money(bill.total), true)}
+        {row("Paid on it", money(bill.paid))}
+        {row("Still owed on it", money(bill.due))}
+        {bill.advanceUsed > 0 && row("Advance used (goes back)", money(bill.advanceUsed))}
+      </dl>
+      <div className="rounded-xl border border-danger/30 bg-danger/5 px-3.5 py-2.5">
+        <div className="text-[11px] font-bold uppercase tracking-wider text-danger">{customerName}&apos;s balance</div>
+        <div className="tabular-nums mt-0.5 flex flex-wrap items-baseline gap-x-2 text-base font-extrabold">
+          <span>{money(owed)}</span>
+          <span className="text-muted">→</span>
+          <span className="text-danger">{money(after)}</span>
+          <span className="text-xs font-semibold text-muted">after deleting</span>
+        </div>
+        {bill.paid > 0 && (
+          <p className="mt-1 text-xs font-medium text-muted">
+            The {money(bill.paid)} already paid stays recorded as paid, same as deleting a bill on Bills.
+          </p>
+        )}
+      </div>
+      <p className="text-xs font-medium text-muted">
+        The bill stays on Bills marked deleted. The order and its track link go. The customer is not texted.
+      </p>
     </div>
   );
 }

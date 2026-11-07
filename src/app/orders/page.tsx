@@ -1,6 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
+import { BarChart3, CalendarDays, Search, X } from "lucide-react";
+import NavPending from "@/components/NavPending";
 import { usePermissionGate } from "@/components/AdminGate";
 import { useAuth } from "@/lib/auth";
 import { usePermissions } from "@/lib/firestore/permissions";
@@ -8,11 +11,12 @@ import { useOrders } from "@/lib/firestore/orders";
 import { useCustomerLabel } from "@/lib/customerName";
 import { localDateKey } from "@/lib/format";
 import {
-  ORDER_STATUS_LABEL,
-  ORDER_STATUS_TONE,
   dateKeyAdd,
+  monthBounds,
   linesSummary,
   orderLabel,
+  orderMatches,
+  orderPill,
   qtyText,
   relativeDay,
   shortDate,
@@ -26,8 +30,17 @@ import type { Order } from "@/lib/types";
 const TABS = ["Today", "Upcoming", "Done"] as const;
 type Tab = (typeof TABS)[number];
 
-/** How far back the list looks for orders still not delivered, and for Done. */
+/** How far back the list looks for orders still not delivered. */
 const PAST_DAYS = 30;
+
+const DONE_RANGES = [
+  { key: "7", label: "Last 7 days" },
+  { key: "30", label: "Last 30 days" },
+  { key: "month", label: "This month" },
+  { key: "lastMonth", label: "Last month" },
+  { key: "custom", label: "Custom" },
+] as const;
+type DoneRangeKey = (typeof DONE_RANGES)[number]["key"];
 /** How far ahead orders can be booked — matches MAX_DAYS_AHEAD in functions/orders.ts. */
 const AHEAD_DAYS = 365;
 
@@ -48,21 +61,45 @@ export default function OrdersPage() {
   const { orders, loading } = useOrders(range);
 
   const [tab, setTab] = useState<Tab>("Today");
+  const [doneRange, setDoneRange] = useState<DoneRangeKey>("30");
+  const [customFrom, setCustomFrom] = useState(() => dateKeyAdd(today, -30));
+  const [customTo, setCustomTo] = useState(today);
+  const [search, setSearch] = useState("");
+  const done = useMemo(() => {
+    if (doneRange === "7") return { from: dateKeyAdd(today, -7), to: today };
+    if (doneRange === "30") return { from: dateKeyAdd(today, -30), to: today };
+    if (doneRange === "month") return { from: monthBounds(today).from, to: today };
+    if (doneRange === "lastMonth") return monthBounds(dateKeyAdd(monthBounds(today).from, -1));
+    const from = customFrom || today;
+    const to = customTo && customTo >= from ? customTo : from;
+    return { from, to: to > today ? today : to };
+  }, [doneRange, customFrom, customTo, today]);
+  // A Done range inside what the main list already holds costs no extra reads.
+  const doneInMain = done.from >= range.from && done.to <= range.to;
+  const { orders: doneExtra, loading: doneLoading } = useOrders(tab === "Done" && !doneInMain ? done : null);
   const [creating, setCreating] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
 
-  const opened = orders.find((o) => o.id === openId) ?? null;
-  const editingOrder = orders.find((o) => o.id === editingId) ?? null;
-  const sendingOrder = orders.find((o) => o.id === sendingId) ?? null;
+  const find = (id: string | null) => (id ? (orders.find((o) => o.id === id) ?? doneExtra.find((o) => o.id === id) ?? null) : null);
+  const opened = find(openId);
+  const editingOrder = find(editingId);
+  const sendingOrder = find(sendingId);
 
-  const todays = orders.filter((o) => o.deliveryDate === today && o.status !== "cancelled");
-  const overdue = orders.filter((o) => o.deliveryDate < today && (o.status === "confirmed" || o.status === "out"));
-  const upcoming = orders.filter((o) => o.deliveryDate > today && o.status !== "cancelled");
-  const done = orders
-    .filter((o) => o.deliveryDate <= today && (o.status === "delivered" || o.status === "cancelled"))
+  // A closed order (its bill deleted on Bills) needs nothing more: it lives in Done.
+  const todays = orders.filter((o) => o.deliveryDate === today && o.status !== "cancelled" && !o.billVoided);
+  const overdue = orders.filter((o) => o.deliveryDate < today && (o.status === "confirmed" || o.status === "out") && !o.billVoided);
+  const upcoming = orders.filter((o) => o.deliveryDate > today && o.status !== "cancelled" && !o.billVoided);
+  const doneOrders = (doneInMain ? orders : doneExtra)
+    .filter(
+      (o) =>
+        o.deliveryDate >= done.from &&
+        o.deliveryDate <= done.to &&
+        (o.billVoided || (o.deliveryDate <= today && (o.status === "delivered" || o.status === "cancelled"))),
+    )
+    .filter((o) => orderMatches(o, search, label(o.customerName)))
     .reverse();
 
   // The morning prep list: everything still to send out today, by product.
@@ -86,7 +123,7 @@ export default function OrdersPage() {
     window.setTimeout(() => setNotice((n) => (n?.text === text ? null : n)), error ? 8000 : 3500);
   }
 
-  const counts: Record<Tab, number> = { Today: todays.length + overdue.length, Upcoming: upcoming.length, Done: done.length };
+  const counts: Record<Tab, number> = { Today: todays.length + overdue.length, Upcoming: upcoming.length, Done: tab === "Done" ? doneOrders.length : 0 };
 
   return (
     <div className="mx-auto max-w-3xl p-4 pb-8">
@@ -95,14 +132,34 @@ export default function OrdersPage() {
           <h1 className="text-2xl font-extrabold tracking-tight">Orders</h1>
           <p className="text-sm font-medium text-muted">Booked ahead by shops and customers</p>
         </div>
-        {canManage && (
-          <button
-            onClick={() => setCreating(true)}
-            className="min-h-[48px] shrink-0 rounded-xl bg-accent px-4 text-sm font-bold text-white"
+        <div className="flex shrink-0 items-center gap-2">
+          <Link
+            href="/orders/calendar"
+            aria-label="Order calendar"
+            title="Calendar"
+            className="relative flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-surface text-ink"
           >
-            + New order
-          </button>
-        )}
+            <CalendarDays className="h-5 w-5" />
+            <NavPending tone="light" />
+          </Link>
+          <Link
+            href="/orders/report"
+            aria-label="Order reports"
+            title="Order reports"
+            className="relative flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-surface text-ink"
+          >
+            <BarChart3 className="h-5 w-5" />
+            <NavPending tone="light" />
+          </Link>
+          {canManage && (
+            <button
+              onClick={() => setCreating(true)}
+              className="min-h-[48px] rounded-xl bg-accent px-4 text-sm font-bold text-white"
+            >
+              + New order
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-3 flex gap-1 rounded-xl bg-ground p-1" role="tablist">
@@ -168,13 +225,86 @@ export default function OrdersPage() {
             ))}
           </div>
         )
-      ) : done.length === 0 ? (
-        <Empty text={`No delivered or cancelled orders in the last ${PAST_DAYS} days.`} />
       ) : (
-        <div className="mt-3 flex flex-col gap-2">
-          {done.map((o) => (
-            <OrderRow key={o.id} order={o} today={today} showDate canManage={canManage} label={label} onOpen={setOpenId} onSendOut={setSendingId} />
-          ))}
+        <div className="mt-3 flex flex-col gap-3">
+          <div className="flex flex-col gap-2 rounded-2xl border border-border bg-surface p-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-2" />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search order no, customer or product"
+                aria-label="Search done orders"
+                className="min-h-[48px] w-full rounded-xl border border-border bg-ground pl-10 pr-11 text-base outline-none focus:border-accent"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch("")}
+                  aria-label="Clear search"
+                  className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+              {DONE_RANGES.map((r) => (
+                <button
+                  key={r.key}
+                  type="button"
+                  aria-pressed={doneRange === r.key}
+                  onClick={() => setDoneRange(r.key)}
+                  className={`min-h-[40px] shrink-0 rounded-full border px-3.5 text-sm font-bold ${
+                    doneRange === r.key ? "border-ink bg-ink text-white" : "border-border text-muted"
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+            {doneRange === "custom" && (
+              <div className="grid grid-cols-2 gap-2">
+                <label className="flex flex-col gap-1 text-xs font-bold text-muted">
+                  From
+                  <input
+                    type="date"
+                    value={customFrom}
+                    max={today}
+                    onChange={(e) => setCustomFrom(e.target.value)}
+                    className="min-h-[44px] rounded-xl border border-border bg-ground px-3 text-base font-medium text-ink"
+                  />
+                </label>
+                <label className="flex flex-col gap-1 text-xs font-bold text-muted">
+                  To
+                  <input
+                    type="date"
+                    value={customTo}
+                    min={customFrom}
+                    max={today}
+                    onChange={(e) => setCustomTo(e.target.value)}
+                    className="min-h-[44px] rounded-xl border border-border bg-ground px-3 text-base font-medium text-ink"
+                  />
+                </label>
+              </div>
+            )}
+            <p className="tabular-nums text-xs font-semibold text-muted">
+              {shortDate(done.from)} – {shortDate(done.to)} · {doneOrders.length} {doneOrders.length === 1 ? "order" : "orders"}
+              {search.trim() && " found"}
+            </p>
+          </div>
+          {!doneInMain && doneLoading && doneExtra.length === 0 ? (
+            <SkeletonRows label="Loading orders" rows={4} />
+          ) : doneOrders.length === 0 ? (
+            <Empty text={search.trim() ? "No done orders match that search." : "No delivered or cancelled orders in these dates."} />
+          ) : (
+            <div className="flex flex-col gap-2">
+              {doneOrders.map((o) => (
+                <OrderRow key={o.id} order={o} today={today} showDate canManage={canManage} label={label} onOpen={setOpenId} onSendOut={setSendingId} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -274,17 +404,19 @@ function OrderRow({
   onOpen: (id: string) => void;
   onSendOut: (id: string) => void;
 }) {
-  const tone = ORDER_STATUS_TONE[order.status];
+  const pill = orderPill(order);
   const sendable = canManage && order.status === "confirmed" && order.deliveryDate <= today;
   return (
     <div
-      className={`flex items-stretch gap-2 rounded-2xl border border-border bg-surface ${order.status === "cancelled" ? "opacity-60" : ""}`}
+      className={`flex items-stretch gap-2 rounded-2xl border border-border bg-surface ${
+        order.status === "cancelled" || order.billVoided ? "opacity-60" : ""
+      }`}
     >
       <button onClick={() => onOpen(order.id)} className="min-w-0 flex-1 px-3.5 py-3 text-left">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="tabular-nums text-sm font-bold text-muted">{orderLabel(order.orderNo)}</span>
           <span className="min-w-0 truncate text-base font-bold">{label(order.customerName)}</span>
-          <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${tone.pill}`}>{ORDER_STATUS_LABEL[order.status]}</span>
+          <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${pill.pill}`}>{pill.label}</span>
         </div>
         <div className="mt-0.5 line-clamp-2 text-sm font-medium text-muted">
           {showDate && <span className="font-bold text-ink">{relativeDay(order.deliveryDate, today)} · </span>}
